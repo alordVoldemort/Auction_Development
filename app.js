@@ -15,7 +15,6 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 // Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/admin', adminRoutes); // Add this line
 
 // Health check endpoint
 app.get('/health', (req, res) => {
