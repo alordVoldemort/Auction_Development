@@ -149,3 +149,66 @@ exports.getProfile = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error", error: error.message });
   }
 };
+
+// Edit Profile by ID - User can only edit their own profile
+exports.editProfileByID = async (req, res) => {
+  try {
+    const userId = req.user.userId; // Authenticated user's ID
+    const { user_id } = req.params; // User ID from URL parameters
+    const { company_name, person_name, email, company_address } = req.body;
+
+    // Validate that user is editing their own profile
+    if (parseInt(user_id) !== parseInt(userId)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "You can only edit your own profile" 
+      });
+    }
+
+    // Validate required fields
+    if (!company_name || !person_name) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Company name and person name are required" 
+      });
+    }
+
+    // Check if user exists
+    const [userCheck] = await db.query('SELECT id FROM users WHERE id = ?', [user_id]);
+    if (userCheck.length === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Update user profile
+    const [result] = await db.query(
+      `UPDATE users 
+       SET company_name = ?, person_name = ?, email = ?, company_address = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [company_name, person_name, email, company_address, user_id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(400).json({ success: false, message: "Failed to update profile" });
+    }
+
+    // Fetch updated user data
+    const [updatedUser] = await db.query(
+      'SELECT id, company_name, phone_number, person_name, email, company_address FROM users WHERE id = ?',
+      [user_id]
+    );
+
+    res.json({
+      success: true,
+      message: "Profile updated successfully",
+      user: updatedUser[0]
+    });
+
+  } catch (error) {
+    console.error('Edit profile by ID error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Server error", 
+      error: error.message 
+    });
+  }
+};

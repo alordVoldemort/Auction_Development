@@ -12,5 +12,7 @@ router.post('/verify-otp', authController.verifyLoginOTP);
 
 // Profile route (protected)
 router.get('/profile', authMiddleware.authenticateToken, authController.getProfile);
+// In your routes file:
+router.put('/profile/:user_id', authMiddleware.authenticateToken, authController.editProfileByID);
 
 module.exports = router;
