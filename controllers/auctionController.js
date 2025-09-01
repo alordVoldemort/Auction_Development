@@ -182,11 +182,13 @@ exports.getAuctionDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Get auction details with creator information
+    // Get auction details with creator information (added email & company_address)
     const [auctions] = await db.query(`
       SELECT a.*, 
              u.company_name as creator_company, 
-             u.person_name as creator_name
+             u.person_name as creator_name,
+             u.email as creator_email,
+             u.company_address as creator_address
       FROM auctions a 
       LEFT JOIN users u ON a.created_by = u.id 
       WHERE a.id = ?
@@ -221,14 +223,16 @@ exports.getAuctionDetails = async (req, res) => {
         "status": auction.status.toUpperCase(),
         "auctioneer_details": {
           "company_name": auction.creator_company || "Unknown Company",
-          "person_name": auction.creator_name || "Unknown Person"
+          "person_name": auction.creator_name || "Unknown Person",
+          "email": auction.creator_email || "Unknown Email",
+          "company_address": auction.creator_address || "Unknown Address"
         },
         "auction_information": {
           "auction_date": formattedDate,
           "start_time": auction.start_time,
           "duration": `${auction.duration / 60} minutes`,
           "currency": auction.currency,
-          "open_to_all": auction.pre_bid_allowed ? "Yes" : "No",
+          "open_to_all": auction.open_to_all ? "Yes" : "No",
           "pre_bid_allowed": auction.pre_bid_allowed ? "Yes" : "No",
           "decremental_value": auction.decremental_value > 0 ? `INR ${auction.decremental_value}` : "N/A",
           "base_price": `INR ${auction.base_price}`,
