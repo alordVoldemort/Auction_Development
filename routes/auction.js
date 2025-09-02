@@ -17,6 +17,8 @@ router.post('/participants/add', auctionController.addParticipants);
 router.get('/:auction_id/participants', auctionController.getParticipants);
 router.post('/join', auctionController.joinAuction);
 
+// 
+
 
 
 // Add these new routes for My Auctions UI
