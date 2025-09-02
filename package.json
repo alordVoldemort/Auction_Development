@@ -8,6 +8,7 @@
     "dev": "nodemon app.js"
   },
   "dependencies": {
+    "@sendgrid/mail": "^8.1.5",
     "axios": "^1.11.0",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
@@ -16,6 +17,7 @@
     "firebase-admin": "^13.5.0",
     "form-data": "^4.0.4",
     "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.18.0",
     "multer": "^2.0.2",
     "mysql2": "^3.6.5",
     "socket.io": "^4.8.1",

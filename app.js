@@ -8,6 +8,7 @@ require('dotenv').config();
 const authRoutes = require('./routes/user-auth-routes');
 const auctionRoutes = require('./routes/auction');
 const myAuctionsRoutes = require('./routes/myAuctions'); 
+const auctionDetailRoutes = require('./routes/auctionDetailRoute')
 const dashboardRoutes = require('./routes/dashboard');
 
 const app = express();
@@ -38,6 +39,7 @@ app.set('io', io);
 app.use('/api/auth', authRoutes);
 app.use('/api/auction', auctionRoutes);
 app.use('/api/my-auctions', myAuctionsRoutes);
+app.use('/api/auctionreports', auctionDetailRoutes);
 app.use('/api', dashboardRoutes);
 
 // Health check endpoint
