@@ -47,7 +47,7 @@ app.use('/api/my-auctions', myAuctionsRoutes);
 app.use('/api/auctionreports', auctionDetailRoutes);
 app.use('/api', dashboardRoutes);
 app.use('/api/admin', adminauthRoutes);
-app.use('/api', adminRoutes);
+app.use('/api/fulldashboard', adminRoutes);
 app.use('/api/user/admin', adminUserRoutes);
 app.use('/api/admin/auctions',adminAuctionRoutes);
 app.use('/api/admin/reports', adminReportsRoutes);
