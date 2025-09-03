@@ -10,6 +10,8 @@ const auctionRoutes = require('./routes/auction');
 const myAuctionsRoutes = require('./routes/myAuctions'); 
 const auctionDetailRoutes = require('./routes/auctionDetailRoute')
 const dashboardRoutes = require('./routes/dashboard');
+const adminauthRoutes = require('./routes/admin-auth-Routes');
+const adminRoutes = require('./routes/adminRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -41,6 +43,9 @@ app.use('/api/auction', auctionRoutes);
 app.use('/api/my-auctions', myAuctionsRoutes);
 app.use('/api/auctionreports', auctionDetailRoutes);
 app.use('/api', dashboardRoutes);
+app.use('/api/admin', adminauthRoutes);
+app.use('/api', adminRoutes);
+
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -145,3 +150,4 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
+

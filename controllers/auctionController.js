@@ -300,10 +300,10 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    if (auction.status !== 'live') {
+    if (auction.status !== 'upcoming') {
       return res.status(400).json({
         success: false,
-        message: 'Auction is not live'
+        message: 'Auction is not upcoming'
       });
     }
 
