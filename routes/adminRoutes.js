@@ -7,6 +7,6 @@ const { verifyAdminToken } = require('../controllers/adminAuthController');
 router.use(verifyAdminToken);
 
 // Dashboard routes
-router.get('/Overview', adminController.getAdminDashboard);
+router.get('/dashboard', adminController.getAdminDashboard);
 
 module.exports = router;
