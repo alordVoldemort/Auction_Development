@@ -12,6 +12,9 @@ const auctionDetailRoutes = require('./routes/auctionDetailRoute')
 const dashboardRoutes = require('./routes/dashboard');
 const adminauthRoutes = require('./routes/admin-auth-Routes');
 const adminRoutes = require('./routes/adminRoutes');
+const adminUserRoutes = require('./routes/adminUserRoutes');
+const adminAuctionRoutes = require('./routes/admin-auction-routes');
+const adminReportsRoutes = require('./routes/adminReportsRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -45,7 +48,9 @@ app.use('/api/auctionreports', auctionDetailRoutes);
 app.use('/api', dashboardRoutes);
 app.use('/api/admin', adminauthRoutes);
 app.use('/api', adminRoutes);
-
+app.use('/api/user/admin', adminUserRoutes);
+app.use('/api/admin/auctions',adminAuctionRoutes);
+app.use('/api/admin/reports', adminReportsRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
