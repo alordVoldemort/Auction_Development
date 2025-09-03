@@ -282,7 +282,7 @@ exports.getLiveAuctions = async (req, res) => {
 
 exports.placeBid = async (req, res) => {
   try {
-    const { auction_id, amount } = req.body;
+    let { auction_id, amount } = req.body;
     const user_id = req.user.userId;
 
     if (!auction_id || !amount) {
@@ -292,7 +292,16 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    const auction = await Auction.findById(auction_id);
+    // ✅ Always normalize auction_id
+    const auctionId = parseInt(auction_id, 10);
+    if (isNaN(auctionId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid auction ID'
+      });
+    }
+
+    const auction = await Auction.findById(auctionId);
     if (!auction) {
       return res.status(404).json({
         success: false,
@@ -300,12 +309,22 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    if (auction.status !== 'upcoming') {
+    // ✅ Normalize status check
+    if (auction.status.toLowerCase() !== 'upcoming') {
       return res.status(400).json({
         success: false,
         message: 'Auction is not upcoming'
       });
     }
+
+    // ✅ Parse numbers (remove INR/commas)
+    const parsePrice = (val) => {
+      if (!val) return 0;
+      return parseFloat(val.toString().replace(/[^\d.-]/g, '')) || 0;
+    };
+
+    const currentPrice = parsePrice(auction.current_price);
+    const decrementalValue = parsePrice(auction.decremental_value);
 
     const bidAmount = parseFloat(amount);
     if (isNaN(bidAmount) || bidAmount <= 0) {
@@ -315,38 +334,41 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    if (auction.decremental_value > 0 && bidAmount >= auction.current_price) {
+    // ✅ Check auction type
+    if (decrementalValue > 0 && bidAmount >= currentPrice) {
       return res.status(400).json({
         success: false,
-        message: `Bid must be lower than current price (${auction.current_price})`
+        message: `Bid must be lower than current price (${currentPrice})`
       });
     }
 
-    if (auction.decremental_value === 0 && bidAmount <= auction.current_price) {
+    if (decrementalValue === 0 && bidAmount <= currentPrice) {
       return res.status(400).json({
         success: false,
-        message: `Bid must be higher than current price (${auction.current_price})`
+        message: `Bid must be higher than current price (${currentPrice})`
       });
     }
 
+    // ✅ Save bid
     const bidId = await Bid.create({
-      auction_id,
+      auction_id: auctionId,
       user_id,
       amount: bidAmount
     });
 
-    await Auction.updateCurrentPrice(auction_id, bidAmount);
+    // ✅ Update auction
+    await Auction.updateCurrentPrice(auctionId, bidAmount);
     await Bid.setWinningBid(bidId);
 
-    const updatedAuction = await Auction.findById(auction_id);
-    const bids = await Bid.findByAuction(auction_id);
+    const updatedAuction = await Auction.findById(auctionId);
+    const bids = await Bid.findByAuction(auctionId);
 
     res.json({
       success: true,
       message: 'Bid placed successfully',
       bid: {
         id: bidId,
-        auction_id,
+        auction_id: auctionId,
         user_id,
         amount: bidAmount,
         bid_time: new Date()
@@ -364,6 +386,7 @@ exports.placeBid = async (req, res) => {
     });
   }
 };
+
 
 exports.closeAuction = async (req, res) => {
   try {
