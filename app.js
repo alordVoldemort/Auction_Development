@@ -7,8 +7,8 @@ require('dotenv').config();
 
 const authRoutes = require('./routes/user-auth-routes');
 const auctionRoutes = require('./routes/auction');
-const myAuctionsRoutes = require('./routes/myAuctions'); 
-const auctionDetailRoutes = require('./routes/auctionDetailRoute')
+const myAuctionsRoutes = require('./routes/myAuctions');
+const auctionDetailRoutes = require('./routes/auctionDetailRoute');
 const dashboardRoutes = require('./routes/dashboard');
 const adminauthRoutes = require('./routes/admin-auth-Routes');
 const adminRoutes = require('./routes/adminRoutes');
@@ -49,12 +49,50 @@ app.use('/api', dashboardRoutes);
 app.use('/api/admin', adminauthRoutes);
 app.use('/api/fulldashboard', adminRoutes);
 app.use('/api/user/admin', adminUserRoutes);
-app.use('/api/admin/auctions',adminAuctionRoutes);
+app.use('/api/admin/auctions', adminAuctionRoutes);
 app.use('/api/admin/reports', adminReportsRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ success: true, message: 'Server is running' });
+});
+
+// ✅ WhatsApp Webhook Verification
+app.get("/webhook", (req, res) => {
+  const VERIFY_TOKEN = "my_verify_token"; // 👉 change this to something secure
+
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode && token) {
+    if (mode === "subscribe" && token === VERIFY_TOKEN) {
+      console.log("WEBHOOK_VERIFIED ✅");
+      res.status(200).send(challenge);
+    } else {
+      res.sendStatus(403);
+    }
+  }
+});
+
+// ✅ WhatsApp Webhook Listener (incoming messages/events)
+app.post("/webhook", (req, res) => {
+  const body = req.body;
+  console.log("📩 Incoming webhook:", JSON.stringify(body, null, 2));
+
+  if (body.object) {
+    if (
+      body.entry &&
+      body.entry[0].changes &&
+      body.entry[0].changes[0].value.messages
+    ) {
+      const message = body.entry[0].changes[0].value.messages[0];
+      console.log("📥 New WhatsApp Message:", message);
+    }
+    res.sendStatus(200);
+  } else {
+    res.sendStatus(404);
+  }
 });
 
 // Enhanced WebSocket handling
@@ -65,50 +103,50 @@ io.on('connection', (socket) => {
   socket.on('joinAuction', (data) => {
     const { auctionId, userId } = data;
     socket.join(`auction_${auctionId}`);
-    
+
     // Track user in active auctions
     if (!activeAuctions.has(auctionId)) {
       activeAuctions.set(auctionId, new Set());
     }
     activeAuctions.get(auctionId).add(userId);
-    
+
     console.log(`User ${userId} joined auction ${auctionId}`);
-    
+
     // Send current auction state to the new user
     socket.emit('auctionState', {
       participants: activeAuctions.get(auctionId).size,
       auctionId
     });
-    
+
     // Notify others about new participant
     socket.to(`auction_${auctionId}`).emit('participantJoined', {
       userId,
       participants: activeAuctions.get(auctionId).size
     });
   });
-  
+
   // Leave auction room
   socket.on('leaveAuction', (data) => {
     const { auctionId, userId } = data;
     socket.leave(`auction_${auctionId}`);
-    
+
     if (activeAuctions.has(auctionId)) {
       activeAuctions.get(auctionId).delete(userId);
-      
+
       // Notify others about participant leaving
       socket.to(`auction_${auctionId}`).emit('participantLeft', {
         userId,
         participants: activeAuctions.get(auctionId).size
       });
     }
-    
+
     console.log(`User ${userId} left auction ${auctionId}`);
   });
-  
+
   // Handle disconnection
   socket.on('disconnect', () => {
     console.log('🔴 User disconnected:', socket.id);
-    
+
     // Clean up from all active auctions
     activeAuctions.forEach((users, auctionId) => {
       if (users.has(socket.id)) {
@@ -130,7 +168,7 @@ io.on('connection', (socket) => {
       const auctionDateTime = new Date(`${auction.auction_date}T${auction.start_time}`);
       const endTime = new Date(auctionDateTime.getTime() + (auction.duration * 1000));
       const timeRemaining = endTime - now;
-      
+
       socket.emit('timerSync', {
         auctionId,
         timeRemaining: Math.max(0, timeRemaining),
@@ -155,4 +193,3 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
-

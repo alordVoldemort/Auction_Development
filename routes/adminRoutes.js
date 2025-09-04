@@ -9,4 +9,5 @@ router.use(verifyAdminToken);
 // Dashboard routes
 router.get('/admin', adminController.getAdminDashboard);
 
+
 module.exports = router;

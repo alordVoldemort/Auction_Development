@@ -11,4 +11,8 @@ router.get('/report/auction-performance', adminReportsController.getAuctionPerfo
 // GET /api/admin/reports/user-activity?filter=this_week
 router.get('/reports/user-activity', adminReportsController.getUserActivityReport);
 
+// // Revenue Analytics Routes
+// router.get('/revenue-analytics', adminReportsController.getRevenueAnalytics);
+// router.get('/revenue-by-range', adminReportsController.getRevenueByDateRange);
+
 module.exports = router;
