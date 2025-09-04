@@ -59,7 +59,7 @@ app.get('/health', (req, res) => {
 
 // ✅ WhatsApp Webhook Verification
 app.get("/webhook", (req, res) => {
-  const VERIFY_TOKEN = "my_verify_token"; // 👉 change this to something secure
+  const VERIFY_TOKEN = "EAARDPjzhh64BPf9xiSCqKjX3CCFlILaYDfq0KKGPvGKTlVFoTvF6QN9RVkEEKqx7fSBj2KbU2jvFk3sfG7oKEyzDKNkOLt44yTgWoYZBo1m49bog0csgdSz0VQPzyFQfzeqIv33adUZAgNxOm6wvoUcZCu8yO7XPZCxQihX69kjreweTjHhx1nwWJdcylVZBg0VYbAU1jIiCpRi0VS7VkZC0hkKGlNwO5EWzJqMxzrpsprZBwZDZD"; // 👉 change this to something secure
 
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
