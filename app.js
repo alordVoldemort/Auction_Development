@@ -57,9 +57,13 @@ app.get('/health', (req, res) => {
   res.status(200).json({ success: true, message: 'Server is running' });
 });
 
-// ✅ WhatsApp Webhook Verification
+/**
+ * ✅ WhatsApp Webhook Verification
+ * You must add VERIFY_TOKEN in your .env file
+ * Example: VERIFY_TOKEN=my_secret_token_123
+ */
 app.get("/webhook", (req, res) => {
-  const VERIFY_TOKEN = "EAARDPjzhh64BPf9xiSCqKjX3CCFlILaYDfq0KKGPvGKTlVFoTvF6QN9RVkEEKqx7fSBj2KbU2jvFk3sfG7oKEyzDKNkOLt44yTgWoYZBo1m49bog0csgdSz0VQPzyFQfzeqIv33adUZAgNxOm6wvoUcZCu8yO7XPZCxQihX69kjreweTjHhx1nwWJdcylVZBg0VYbAU1jIiCpRi0VS7VkZC0hkKGlNwO5EWzJqMxzrpsprZBwZDZD"; // 👉 change this to something secure
+  const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -68,11 +72,12 @@ app.get("/webhook", (req, res) => {
   if (mode && token) {
     if (mode === "subscribe" && token === VERIFY_TOKEN) {
       console.log("WEBHOOK_VERIFIED ✅");
-      res.status(200).send(challenge);
+      return res.status(200).send(challenge);
     } else {
-      res.sendStatus(403);
+      return res.sendStatus(403);
     }
   }
+  res.sendStatus(400);
 });
 
 // ✅ WhatsApp Webhook Listener (incoming messages/events)
@@ -162,7 +167,7 @@ io.on('connection', (socket) => {
   // Handle auction timer sync
   socket.on('requestTimerSync', (auctionId) => {
     // Calculate time remaining and send to client
-    const auction = getAuctionById(auctionId); // You'll need to implement this
+    const auction = getAuctionById(auctionId); // ⚠️ Implement this in your code
     if (auction) {
       const now = new Date();
       const auctionDateTime = new Date(`${auction.auction_date}T${auction.start_time}`);
