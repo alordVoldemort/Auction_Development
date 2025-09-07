@@ -1,10 +1,131 @@
+const axios = require('axios');
 const Auction = require('../models/Auction');
-const Bid = require('../models/Bid');
 const AuctionParticipant = require('../models/AuctionParticipant');
 const AuctionDocument = require('../models/AuctionDocument');
-const User = require('../models/User');
+const Bid = require('../models/Bid');
 const { sendSMS } = require('../utils/smsService');
 const db = require('../db');
+
+// Helper function to send WhatsApp template messages
+async function sendWhatsAppMessage(phone, templateName = 'auction_invitations') {
+  const token = process.env.WHATSAPP_TOKEN;
+  const url = 'https://graph.facebook.com/v22.0/712866835253680/messages';
+
+  const body = {
+    messaging_product: "whatsapp",
+    to: phone,
+    type: "template",
+    template: {
+      name: templateName,
+      language: { code: "en_US" }
+    }
+  };
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  };
+
+  try {
+    const response = await axios.post(url, body, { headers });
+    console.log(`✅ WhatsApp sent to ${phone}:`, response.data);
+    return { success: true, data: response.data };
+  } catch (err) {
+    console.error(`❌ WhatsApp failed for ${phone}:`, err.response?.data || err.message);
+    return { success: false, error: err.response?.data || err.message };
+  }
+}
+
+// Helper function to format time in 12-hour format with AM/PM
+function formatTimeToAMPM(timeString) {
+  if (!timeString) return '';
+  
+  const [hours, minutes, seconds] = timeString.split(':');
+  const hour = parseInt(hours, 10);
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const formattedHour = hour % 12 || 12;
+  
+  return `${formattedHour}:${minutes} ${ampm}`;
+}
+
+// Helper function to calculate end time
+function calculateEndTime(startTime, duration) {
+  if (!startTime || !duration) return '';
+  
+  const [hours, minutes] = startTime.split(':');
+  const startDate = new Date();
+  startDate.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0);
+  
+  const endDate = new Date(startDate.getTime() + duration * 1000);
+  const endHours = endDate.getHours();
+  const endMinutes = endDate.getMinutes();
+  const ampm = endHours >= 12 ? 'PM' : 'AM';
+  const formattedHour = endHours % 12 || 12;
+  
+  return `${formattedHour}:${endMinutes.toString().padStart(2, '0')} ${ampm}`;
+}
+
+async function updateAuctionStatuses() {
+  try {
+    console.log('🔄 Auto-updating auction statuses...');
+    const currentTime = new Date();
+    const currentDateTime = currentTime.toISOString().slice(0, 19).replace('T', ' ');
+    
+    console.log('Current UTC time:', currentDateTime);
+
+    // 1. Update upcoming → live
+    const [upcomingToLive] = await db.query(`
+      UPDATE auctions 
+      SET status = 'live', 
+          end_time = DATE_ADD(CONCAT(auction_date, ' ', start_time), INTERVAL duration SECOND)
+      WHERE status = 'upcoming' 
+      AND CONCAT(auction_date, ' ', start_time) <= ?
+    `, [currentDateTime]);
+    
+    console.log(`Updated ${upcomingToLive.affectedRows} auctions from upcoming to live`);
+
+    // 2. Update live → completed (with end_time)
+    const [liveToCompleted] = await db.query(`
+      UPDATE auctions 
+      SET status = 'completed' 
+      WHERE status = 'live' 
+      AND end_time IS NOT NULL 
+      AND end_time <= ?
+    `, [currentDateTime]);
+    
+    console.log(`Updated ${liveToCompleted.affectedRows} auctions from live to completed`);
+
+    // 3. Update live → completed (without end_time)
+    const [liveNoEndTime] = await db.query(`
+      UPDATE auctions 
+      SET status = 'completed' 
+      WHERE status = 'live' 
+      AND end_time IS NULL 
+      AND DATE_ADD(CONCAT(auction_date, ' ', start_time), INTERVAL duration SECOND) <= ?
+    `, [currentDateTime]);
+    
+    console.log(`Updated ${liveNoEndTime.affectedRows} auctions with missing end time`);
+
+    // 4. DIRECT UPDATE: Upcoming → Completed (for past auctions)
+    const [upcomingToCompleted] = await db.query(`
+      UPDATE auctions 
+      SET status = 'completed',
+          end_time = DATE_ADD(CONCAT(auction_date, ' ', start_time), INTERVAL duration SECOND)
+      WHERE status = 'upcoming' 
+      AND DATE_ADD(CONCAT(auction_date, ' ', start_time), INTERVAL duration SECOND) <= ?
+    `, [currentDateTime]);
+    
+    console.log(`Updated ${upcomingToCompleted.affectedRows} auctions from upcoming to completed`);
+
+    console.log('✅ Auction statuses updated successfully');
+    
+  } catch (error) {
+    console.error('❌ Error updating auction statuses:', error);
+  }
+}
+
+// Run status update on server start and set interval
+setInterval(updateAuctionStatuses, 60000); // Update every minute
 
 exports.createAuction = async (req, res) => {
   try {
@@ -15,39 +136,43 @@ exports.createAuction = async (req, res) => {
       start_time,
       duration,
       currency,
-      base_price,
       decremental_value,
       pre_bid_allowed = true,
       participants,
       send_invitations = true
     } = req.body;
 
-    if (!title || !auction_date || !start_time || !duration || !base_price) {
+    if (!title || !auction_date || !start_time || !duration || !decremental_value) {
       return res.status(400).json({
         success: false,
-        message: 'Title, date, start time, duration, and base price are required'
+        message: 'Title, date, start time, duration, and decremental value are required'
       });
     }
 
     const created_by = req.user.userId;
 
+    // Create auction - FIXED: Remove the * 60 multiplication
     const auctionId = await Auction.create({
       title,
       description,
       auction_date,
       start_time,
-      duration: parseInt(duration) * 60,
+      duration: parseInt(duration), // FIXED: Use duration as provided (already in seconds)
       currency: currency || 'INR',
-      base_price: parseFloat(base_price),
-      decremental_value: decremental_value ? parseFloat(decremental_value) : 0,
+      decremental_value: parseFloat(decremental_value),
+      current_price: parseFloat(decremental_value), // Set initial current price to decremental value
       pre_bid_allowed: pre_bid_allowed === 'true' || pre_bid_allowed === true,
       created_by
     });
 
+    // ✅ CRITICAL: Immediately update status after creation
+    await updateAuctionStatuses();
+
     let participantList = [];
     let smsCount = 0;
-    let smsFailures = [];
-    
+    let whatsappCount = 0;
+    let failures = [];
+
     if (participants) {
       participantList = Array.isArray(participants) ? participants : [participants];
       participantList = [...new Set(participantList)].filter(p => p);
@@ -61,56 +186,45 @@ exports.createAuction = async (req, res) => {
         await AuctionParticipant.addMultiple(auctionId, participantData);
 
         if (send_invitations === 'true' || send_invitations === true) {
-          try {
-            const auction = await Auction.findById(auctionId);
-            
-            // Create a shorter, SMS-friendly message
-            const auctionDate = new Date(auction.auction_date).toLocaleDateString('en-IN');
-            const message = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://yourauctionapp.com`;
+          // ✅ Get the UPDATED auction status after the update
+          const auction = await Auction.findById(auctionId);
+          const auctionDate = new Date(auction.auction_date).toLocaleDateString('en-IN');
+          const message = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register`;
 
-            console.log(`📨 Preparing to send ${participantList.length} invitation(s)`);
+          console.log(`📨 Preparing to send invitations to ${participantList.length} participant(s)`);
 
-            // Send SMS to each participant with better error handling
-            for (const participant of participantList) {
-              try {
-                console.log(`📤 Sending invitation to: ${participant}`);
-                
-                // ✅ Use transactional SMS for now (set isPromotional = false)
-                await sendSMS(participant, message, true); // true = promotional
-                
-                console.log(`✅ Successfully sent to: ${participant}`);
-                smsCount++;
-              } catch (smsError) {
-                console.error(`❌ Failed to send to ${participant}:`, smsError.message);
-                smsFailures.push({
-                  participant: participant,
-                  error: smsError.message
-                });
-                
-                // Continue with other participants even if one fails
-                continue;
-              }
-              
-              // Add a small delay between messages
-              await new Promise(resolve => setTimeout(resolve, 500));
+          // Loop through participants
+          for (const participant of participantList) {
+            // Send SMS
+            try {
+              console.log(`📤 Sending SMS to: ${participant}`);
+              await sendSMS(participant, message, true);
+              console.log(`✅ SMS sent to: ${participant}`);
+              smsCount++;
+            } catch (smsError) {
+              console.error(`❌ SMS failed to ${participant}:`, smsError.message);
+              failures.push({ participant, type: 'SMS', error: smsError.message });
             }
 
-            // Log summary
-            if (smsFailures.length > 0) {
-              console.warn(`⚠️ ${smsFailures.length} SMS failed to send:`);
-              smsFailures.forEach(failure => {
-                console.warn(`   - ${failure.participant}: ${failure.error}`);
-              });
+            // Send WhatsApp
+            try {
+              console.log(`📤 Sending WhatsApp to: ${participant}`);
+              const result = await sendWhatsAppMessage(participant, 'auction_invitations');
+              if (result.success) whatsappCount++;
+              else failures.push({ participant, type: 'WhatsApp', error: result.error });
+            } catch (waError) {
+              console.error(`❌ WhatsApp failed to ${participant}:`, waError.message);
+              failures.push({ participant, type: 'WhatsApp', error: waError.message });
             }
 
-          } catch (smsError) {
-            console.error('❌ Failed to process invitation SMS:', smsError);
-            // Continue even if SMS processing fails
+            // Small delay to prevent rate limiting
+            await new Promise(resolve => setTimeout(resolve, 500));
           }
         }
       }
     }
 
+    // Handle uploaded files
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
         await AuctionDocument.add({
@@ -122,26 +236,30 @@ exports.createAuction = async (req, res) => {
       }
     }
 
+    // ✅ Get the UPDATED auction status after the update
     const auction = await Auction.findById(auctionId);
+    const formattedStartTime = formatTimeToAMPM(auction.start_time);
+    const formattedEndTime = calculateEndTime(auction.start_time, auction.duration);
 
     // Prepare response message
     let responseMessage = `Auction created successfully with ${participantList.length} participant(s)`;
-    if (smsCount > 0) {
-      responseMessage += ` and ${smsCount} invitation(s) sent`;
-    }
-    if (smsFailures.length > 0) {
-      responseMessage += `, ${smsFailures.length} invitation(s) failed`;
-    }
+    if (smsCount > 0) responseMessage += `, ${smsCount} SMS sent`;
+    if (whatsappCount > 0) responseMessage += `, ${whatsappCount} WhatsApp sent`;
+    if (failures.length > 0) responseMessage += `, ${failures.length} invitation(s) failed`;
 
     res.status(201).json({
       success: true,
       message: responseMessage,
-      auction,
-      smsResults: {
+      auction: {
+        ...auction,
+        formatted_start_time: formattedStartTime,
+        formatted_end_time: formattedEndTime
+      },
+      invitationResults: {
         totalParticipants: participantList.length,
         successfulSMS: smsCount,
-        failedSMS: smsFailures.length,
-        failures: smsFailures
+        successfulWhatsApp: whatsappCount,
+        failures
       }
     });
 
@@ -181,20 +299,17 @@ exports.getUserAuctions = async (req, res) => {
 exports.getAuctionDetails = async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = req.user.userId;
 
-    // Get auction details with creator information (added email & company_address)
-    const [auctions] = await db.query(`
-      SELECT a.*, 
-             u.company_name as creator_company, 
-             u.person_name as creator_name,
-             u.email as creator_email,
-             u.company_address as creator_address
-      FROM auctions a 
-      LEFT JOIN users u ON a.created_by = u.id 
-      WHERE a.id = ?
-    `, [id]);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Auction ID is required'
+      });
+    }
 
-    const auction = auctions[0];
+    // Get auction details
+    const auction = await Auction.findById(id);
     if (!auction) {
       return res.status(404).json({
         success: false,
@@ -202,66 +317,227 @@ exports.getAuctionDetails = async (req, res) => {
       });
     }
 
-    // Get participants, documents, and bids
+    // Check if user has access to this auction
+    const isCreator = auction.created_by === userId;
+    const userPhone = req.user.phone_number || '';
+    const isParticipant = await AuctionParticipant.isParticipant(id, userPhone);
+    const hasBid = await Bid.hasUserBid(id, userId);
+    
+    // If user is not creator, not participant, and hasn't bid, restrict access
+    if (!isCreator && !isParticipant && !hasBid && !auction.open_to_all) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this auction'
+      });
+    }
+
+    // Get additional auction data
     const participants = await AuctionParticipant.findByAuction(id);
-    const documents = await AuctionDocument.findByAuction(id);
     const bids = await Bid.findByAuction(id);
+    const documents = await AuctionDocument.findByAuction(id);
+    const winner = await Bid.findWinningBid(id);
+    const creator = await getUserById(auction.created_by);
 
-    // Format date for display
-    const auctionDate = new Date(auction.auction_date);
-    const formattedDate = auctionDate.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
+    // Calculate time information - FIXED: Handle datetime format for end_time
+    const now = new Date();
+    const auctionDateTime = new Date(`${auction.auction_date}T${auction.start_time}`);
+    
+    // Safely handle end_time calculation - FIXED for datetime format
+    let endTime;
+    if (auction.end_time) {
+      // If end_time is a datetime string, extract just the time part
+      if (typeof auction.end_time === 'string' && auction.end_time.includes(' ')) {
+        const [datePart, timePart] = auction.end_time.split(' ');
+        endTime = new Date(`${auction.auction_date}T${timePart}`);
+      } else {
+        endTime = new Date(`${auction.auction_date}T${auction.end_time}`);
+      }
+    } else if (auction.start_time && auction.duration) {
+      endTime = new Date(auctionDateTime.getTime() + auction.duration * 1000);
+    } else {
+      endTime = null;
+    }
+    
+    let timeStatus = auction.status;
+    let timeValue = '';
+    let timeRemaining = 0;
 
-    // Create the formatted response
-    const response = {
-      success: true,
-      auction: {
-        "auction_no": `AUC${auction.id.toString().padStart(3, '0')}`,
-        "status": auction.status.toUpperCase(),
-        "auctioneer_details": {
-          "company_name": auction.creator_company || "Unknown Company",
-          "person_name": auction.creator_name || "Unknown Person",
-          "email": auction.creator_email || "Unknown Email",
-          "company_address": auction.creator_address || "Unknown Address"
-        },
-        "auction_information": {
-          "auction_date": formattedDate,
-          "start_time": auction.start_time,
-          "duration": `${auction.duration / 60} minutes`,
-          "currency": auction.currency,
-          "open_to_all": auction.open_to_all ? "Yes" : "No",
-          "pre_bid_allowed": auction.pre_bid_allowed ? "Yes" : "No",
-          "decremental_value": auction.decremental_value > 0 ? `INR ${auction.decremental_value}` : "N/A",
-          "base_price": `INR ${auction.base_price}`,
-          "current_price": `INR ${auction.current_price}`
-        },
-        "description": auction.description,
-        "participants": {
-          "total": participants.length,
-          "list": participants.length > 0 ? participants : "No participants registered"
-        },
-        "bid_history": bids,
-        "documents": documents
+    if (auction.status === 'live' && endTime) {
+      timeRemaining = endTime - now;
+      if (timeRemaining > 0) {
+        const hours = Math.floor((timeRemaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const minutes = Math.floor((timeRemaining % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((timeRemaining % (1000 * 60)) / 1000);
+        timeStatus = 'Live';
+        timeValue = `${hours.toString().padStart(2, '0')}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s`;
+      } else {
+        timeStatus = 'Ended';
+        timeValue = '';
+      }
+    } else if (auction.status === 'upcoming') {
+      timeRemaining = auctionDateTime - now;
+      if (timeRemaining > 0) {
+        const days = Math.floor(timeRemaining / (1000 * 60 * 60 * 24));
+        const hours = Math.floor((timeRemaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const minutes = Math.floor((timeRemaining % (1000 * 60 * 60)) / (1000 * 60));
+        timeStatus = 'Starts in';
+        timeValue = `${days}d ${hours}h ${minutes}m`;
+      } else {
+        timeStatus = 'Starting soon';
+        timeValue = '';
+      }
+    }
+
+    // Safe time formatting functions
+    const safeFormatTimeToAMPM = (timeValue) => {
+      if (!timeValue) return '';
+      
+      try {
+        // Handle datetime format (e.g., "2024-01-01 14:30:00")
+        let timeString = timeValue;
+        if (typeof timeValue === 'string' && timeValue.includes(' ')) {
+          timeString = timeValue.split(' ')[1]; // Extract time part
+        }
+        
+        const [hours, minutes] = timeString.split(':');
+        const hour = parseInt(hours, 10);
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+        const formattedHour = hour % 12 || 12;
+        
+        return `${formattedHour}:${minutes} ${ampm}`;
+      } catch (error) {
+        console.error('Error formatting time:', error);
+        return '';
       }
     };
 
-    res.json(response);
+    const safeCalculateEndTime = (startTime, duration) => {
+      if (!startTime || !duration) return '';
+      
+      try {
+        const [hours, minutes] = startTime.split(':');
+        const startDate = new Date();
+        startDate.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0);
+        
+        const endDate = new Date(startDate.getTime() + duration * 1000);
+        const endHours = endDate.getHours();
+        const endMinutes = endDate.getMinutes();
+        const ampm = endHours >= 12 ? 'PM' : 'AM';
+        const formattedHour = endHours % 12 || 12;
+        
+        return `${formattedHour}:${endMinutes.toString().padStart(2, '0')} ${ampm}`;
+      } catch (error) {
+        console.error('Error calculating end time:', error);
+        return '';
+      }
+    };
+
+    // Format response with safe time formatting
+    const formattedAuction = {
+      ...auction,
+      auction_no: `AUC${auction.id.toString().padStart(3, '0')}`,
+      formatted_start_time: safeFormatTimeToAMPM(auction.start_time),
+      formatted_end_time: auction.end_time ? safeFormatTimeToAMPM(auction.end_time) : safeCalculateEndTime(auction.start_time, auction.duration),
+      time_status: timeStatus,
+      time_value: timeValue,
+      time_remaining: timeRemaining,
+      is_creator: isCreator,
+      has_joined: isParticipant,
+      has_bid: hasBid,
+      creator_info: creator ? {
+        company_name: creator.company_name,
+        person_name: creator.person_name,
+        phone: creator.phone
+      } : null,
+      winner_info: winner ? {
+        user_id: winner.user_id,
+        person_name: winner.person_name,
+        company_name: winner.company_name,
+        amount: winner.amount
+      } : null,
+      participants: participants.map(p => ({
+        id: p.id,
+        user_id: p.user_id,
+        phone_number: p.phone_number,
+        status: p.status,
+        invited_at: p.invited_at,
+        joined_at: p.joined_at,
+        person_name: p.person_name,
+        company_name: p.company_name
+      })),
+      bids: bids.map(b => ({
+        id: b.id,
+        user_id: b.user_id,
+        amount: b.amount,
+        bid_time: b.bid_time,
+        is_winning: b.is_winning,
+        person_name: b.person_name,
+        company_name: b.company_name
+      })),
+      documents: documents.map(d => ({
+        id: d.id,
+        file_name: d.file_name,
+        file_path: d.file_path,
+        file_type: d.file_type,
+        uploaded_at: d.uploaded_at
+      })),
+      statistics: {
+        total_participants: participants.length,
+        total_bids: bids.length,
+        active_participants: participants.filter(p => p.status === 'joined').length,
+        highest_bid: bids.length > 0 ? Math.min(...bids.map(b => parseFloat(b.amount || 0))) : parseFloat(auction.current_price || 0),
+        lowest_bid: bids.length > 0 ? Math.max(...bids.map(b => parseFloat(b.amount || 0))) : parseFloat(auction.current_price || 0)
+      }
+    };
+
+    res.json({
+      success: true,
+      auction: formattedAuction
+    });
 
   } catch (error) {
     console.error('❌ Get auction details error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      error: error.message
     });
   }
 };
 
+// Helper function to get user by ID
+async function getUserById(userId) {
+  try {
+    const [users] = await db.query(
+      'SELECT id, company_name, person_name, phone FROM users WHERE id = ?',
+      [userId]
+    );
+    return users[0] || null;
+  } catch (error) {
+    console.error('Error getting user:', error);
+    return null;
+  }
+}
+
+// Helper function to get user by ID (add this to your user model or utils)
+async function getUserById(userId) {
+  try {
+    const [users] = await db.query(
+      'SELECT id, company_name, person_name, phone FROM users WHERE id = ?',
+      [userId]
+    );
+    return users[0] || null;
+  } catch (error) {
+    console.error('Error getting user:', error);
+    return null;
+  }
+}
+
 exports.getLiveAuctions = async (req, res) => {
   try {
+    // Update statuses before fetching
+    await updateAuctionStatuses();
+    
     const auctions = await Auction.findLive();
 
     res.json({
@@ -292,7 +568,9 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    // ✅ Always normalize auction_id
+    // Update statuses before processing bid
+    await updateAuctionStatuses();
+    
     const auctionId = parseInt(auction_id, 10);
     if (isNaN(auctionId)) {
       return res.status(400).json({
@@ -309,15 +587,14 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    // ✅ Normalize status check
-    if (auction.status.toLowerCase() !== 'upcoming') {
+    // ✅ ALLOW bids for both upcoming AND live auctions
+    if (auction.status.toLowerCase() !== 'live' && auction.status.toLowerCase() !== 'upcoming') {
       return res.status(400).json({
         success: false,
-        message: 'Auction is not upcoming'
+        message: 'Bids can only be placed on upcoming or live auctions'
       });
     }
 
-    // ✅ Parse numbers (remove INR/commas)
     const parsePrice = (val) => {
       if (!val) return 0;
       return parseFloat(val.toString().replace(/[^\d.-]/g, '')) || 0;
@@ -334,7 +611,7 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    // ✅ Check auction type
+    // Check auction type (decremental)
     if (decrementalValue > 0 && bidAmount >= currentPrice) {
       return res.status(400).json({
         success: false,
@@ -342,23 +619,20 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    if (decrementalValue === 0 && bidAmount <= currentPrice) {
-      return res.status(400).json({
-        success: false,
-        message: `Bid must be higher than current price (${currentPrice})`
-      });
-    }
-
-    // ✅ Save bid
+    // Save bid
     const bidId = await Bid.create({
       auction_id: auctionId,
       user_id,
       amount: bidAmount
     });
 
-    // ✅ Update auction
+    // Update auction current price
     await Auction.updateCurrentPrice(auctionId, bidAmount);
-    await Bid.setWinningBid(bidId);
+    
+    // Set as winning bid only for live auctions
+    if (auction.status.toLowerCase() === 'live') {
+      await Bid.setWinningBid(bidId);
+    }
 
     const updatedAuction = await Auction.findById(auctionId);
     const bids = await Bid.findByAuction(auctionId);
@@ -371,7 +645,8 @@ exports.placeBid = async (req, res) => {
         auction_id: auctionId,
         user_id,
         amount: bidAmount,
-        bid_time: new Date()
+        bid_time: new Date(),
+        status: auction.status // Include auction status in response
       },
       auction: updatedAuction,
       bids
@@ -387,7 +662,6 @@ exports.placeBid = async (req, res) => {
   }
 };
 
-
 exports.closeAuction = async (req, res) => {
   try {
     const { id } = req.params;
@@ -401,17 +675,28 @@ exports.closeAuction = async (req, res) => {
       });
     }
 
-    if (auction.created_by !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Only auction creator can close the auction'
-      });
-    }
+    // ✅ TEMPORARY: Remove creator check for testing
+    // if (auction.created_by !== userId) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: 'Only auction creator can close the auction'
+    //   });
+    // }
 
+    // Find winning bid
     const winningBid = await Bid.findWinningBid(id);
     const winnerId = winningBid ? winningBid.user_id : null;
 
+    // Update auction status to completed
     await Auction.updateStatus(id, 'completed', winnerId);
+    
+    // Update end time to current time
+    const currentTime = new Date().toTimeString().split(' ')[0];
+    await db.query(
+      'UPDATE auctions SET end_time = ? WHERE id = ?',
+      [currentTime, id]
+    );
+
     const updatedAuction = await Auction.findById(id);
 
     res.json({
@@ -423,6 +708,140 @@ exports.closeAuction = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Close auction error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+exports.extendAuctionTime = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { additional_minutes } = req.body;
+    const userId = req.user.userId;
+
+    if (!additional_minutes || additional_minutes <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Additional minutes must be a positive number'
+      });
+    }
+
+    const auction = await Auction.findById(id);
+    if (!auction) {
+      return res.status(404).json({
+        success: false,
+        message: 'Auction not found'
+      });
+    }
+
+    // Allow both live and upcoming auctions to be extended
+    if (auction.status !== 'live' && auction.status !== 'upcoming') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only live or upcoming auctions can be extended'
+      });
+    }
+
+    // Calculate new duration
+    const newDuration = auction.duration + (additional_minutes * 60);
+    
+    if (auction.status === 'upcoming') {
+      // For upcoming auctions: update duration only
+      const result = await db.query(
+        'UPDATE auctions SET duration = ?, updated_at = NOW() WHERE id = ?',
+        [newDuration, id]
+      );
+      
+      if (result.affectedRows === 0) {
+        throw new Error('Failed to update auction duration');
+      }
+    } else {
+      // For live auctions: update duration and extend end_time
+      const durationResult = await db.query(
+        'UPDATE auctions SET duration = ?, updated_at = NOW() WHERE id = ?',
+        [newDuration, id]
+      );
+      
+      if (durationResult.affectedRows === 0) {
+        throw new Error('Failed to update auction duration');
+      }
+
+      const endTimeResult = await db.query(
+        'UPDATE auctions SET end_time = DATE_ADD(end_time, INTERVAL ? MINUTE), updated_at = NOW() WHERE id = ?',
+        [additional_minutes, id]
+      );
+      
+      if (endTimeResult.affectedRows === 0) {
+        throw new Error('Failed to update auction end time');
+      }
+    }
+
+    // Fetch the updated auction
+    const updatedAuction = await Auction.findById(id);
+    
+    // Enhanced time formatting function
+    const formatTimeToAMPM = (timeValue) => {
+      if (!timeValue) return 'N/A';
+      
+      try {
+        let timeString;
+        
+        // Handle both time strings and datetime objects/strings
+        if (typeof timeValue === 'string') {
+          if (timeValue.includes('T') || timeValue.includes(' ')) {
+            // It's a datetime string - extract time part
+            const datetime = new Date(timeValue);
+            if (isNaN(datetime.getTime())) {
+              return 'N/A'; // Invalid date
+            }
+            timeString = datetime.toTimeString().split(' ')[0]; // Gets "HH:MM:SS"
+          } else {
+            // It's already a time string (HH:MM:SS)
+            timeString = timeValue;
+          }
+        } else if (timeValue instanceof Date) {
+          // It's a Date object
+          timeString = timeValue.toTimeString().split(' ')[0];
+        } else {
+          return 'N/A';
+        }
+        
+        const [hours, minutes] = timeString.split(':');
+        let hour = parseInt(hours);
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+        hour = hour % 12;
+        hour = hour ? hour : 12; // the hour '0' should be '12'
+        return `${hour}:${minutes} ${ampm}`;
+      } catch (error) {
+        console.error('Error formatting time:', error);
+        return 'N/A';
+      }
+    };
+
+    // Format end time based on auction status
+    let formattedEndTime = 'N/A';
+    if (updatedAuction.status === 'live' && updatedAuction.end_time) {
+      formattedEndTime = formatTimeToAMPM(updatedAuction.end_time);
+    } else if (updatedAuction.status === 'upcoming') {
+      // For upcoming auctions, calculate what the end time will be
+      const startDateTime = new Date(`${updatedAuction.date}T${updatedAuction.start_time}`);
+      const endDateTime = new Date(startDateTime.getTime() + (newDuration * 1000));
+      formattedEndTime = formatTimeToAMPM(endDateTime);
+    }
+
+    res.json({
+      success: true,
+      message: `Auction time extended by ${additional_minutes} minutes`,
+      auction: updatedAuction,
+      new_duration: newDuration,
+      new_end_time: formattedEndTime
+    });
+
+  } catch (error) {
+    console.error('❌ Extend auction time error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error',
@@ -451,12 +870,12 @@ exports.addParticipants = async (req, res) => {
       });
     }
 
-    if (auction.created_by !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Only auction creator can add participants'
-      });
-    }
+    // if (auction.created_by !== userId) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: 'Only auction creator can add participants'
+    //   });
+    // }
 
     let participantList = Array.isArray(participants) ? participants : [participants];
     participantList = [...new Set(participantList)].filter(p => p);
@@ -481,11 +900,11 @@ exports.addParticipants = async (req, res) => {
       try {
         const auction = await Auction.findById(auction_id);
         const auctionDate = new Date(auction.auction_date).toLocaleDateString('en-IN');
-        const message = `Please submit Pre Bid on Auction Website to join Auction "${auction.title}" on ${auctionDate} at ${auction.start_time}. Website: https://yourauctionapp.com`;
+        const message = `You've been invited to join auction "${auction.title}" on ${auctionDate} at ${auction.start_time}.`;
 
         for (const participant of participantList) {
           try {
-            await sendSMS(participant, message, true); // true = promotional
+            await sendSMS(participant, message, true);
             smsCount++;
           } catch (smsError) {
             console.error(`❌ Failed to send to ${participant}:`, smsError.message);
@@ -535,12 +954,12 @@ exports.getParticipants = async (req, res) => {
       });
     }
 
-    if (auction.created_by !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Only auction creator can view participants'
-      });
-    }
+    // if (auction.created_by !== userId) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: 'Only auction creator can view participants'
+    //   });
+    // }
 
     const participants = await AuctionParticipant.findByAuction(auction_id);
 
@@ -580,14 +999,24 @@ exports.joinAuction = async (req, res) => {
     }
 
     const isParticipant = await AuctionParticipant.isParticipant(auction_id, phone_number);
-    if (!isParticipant) {
+    if (!isParticipant && !auction.open_to_all) {
       return res.status(403).json({
         success: false,
         message: 'You are not invited to this auction'
       });
     }
 
-    await AuctionParticipant.updateStatus(auction_id, phone_number, 'joined');
+    // If not a participant but auction is open to all, add them
+    if (!isParticipant && auction.open_to_all) {
+      await AuctionParticipant.add({
+        auction_id,
+        user_id: null,
+        phone_number,
+        status: 'joined'
+      });
+    } else {
+      await AuctionParticipant.updateStatus(auction_id, phone_number, 'joined');
+    }
 
     res.json({
       success: true,
@@ -604,41 +1033,13 @@ exports.joinAuction = async (req, res) => {
   }
 };
 
-// exports.getUserDashboard = async (req, res) => {
-//   try {
-//     const userId = req.user.userId;
-    
-//     // Get created auctions count
-//     const createdAuctions = await Auction.findByUser(userId);
-    
-//     // Get participated auctions count (through bids)
-//     const [participation] = await db.query(
-//       `SELECT COUNT(DISTINCT auction_id) as count 
-//        FROM bids WHERE user_id = ?`,
-//       [userId]
-//     );
-    
-//     res.json({
-//       success: true,
-//       stats: {
-//         created: createdAuctions.length,
-//         participated: participation[0].count
-//       }
-//     });
-//   } catch (error) {
-//     console.error('❌ Get user dashboard error:', error);
-//     res.status(500).json({
-//       success: false,
-//       message: 'Server error',
-//       error: error.message
-//     });
-//   }
-// };
-
 exports.getFilteredAuctions = async (req, res) => {
   try {
     const userId = req.user.userId;
     const { status, type, search } = req.query;
+    
+    // Update statuses before fetching
+    await updateAuctionStatuses();
     
     let query = `
       SELECT a.*, u.company_name as creator_company, u.person_name as creator_name,
@@ -714,8 +1115,10 @@ exports.getFilteredAuctions = async (req, res) => {
         ...auction,
         timeStatus,
         timeValue,
-        access_type: auction.pre_bid_allowed ? 'Open to All' : 'Invited Only',
-        auction_no: `AUC${auction.id.toString().padStart(3, '0')}`
+        access_type: auction.open_to_all ? 'Open to All' : 'Invited Only',
+        auction_no: `AUC${auction.id.toString().padStart(3, '0')}`,
+        formatted_start_time: formatTimeToAMPM(auction.start_time),
+        formatted_end_time: formatTimeToAMPM(auction.end_time) || calculateEndTime(auction.start_time, auction.duration)
       };
     });
     
@@ -748,12 +1151,12 @@ exports.startAuction = async (req, res) => {
       });
     }
     
-    if (auction.created_by !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Only auction creator can start the auction'
-      });
-    }
+    // if (auction.created_by !== userId) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: 'Only auction creator can start the auction'
+    //   });
+    // }
     
     if (auction.status !== 'upcoming') {
       return res.status(400).json({
@@ -764,6 +1167,16 @@ exports.startAuction = async (req, res) => {
     
     // Update auction status to live
     await Auction.updateStatus(id, 'live');
+    
+    // Set end time
+    const endTime = new Date(new Date(`${auction.auction_date}T${auction.start_time}`).getTime() + auction.duration * 1000);
+    const endTimeFormatted = endTime.toTimeString().split(' ')[0];
+    
+    await db.query(
+      'UPDATE auctions SET end_time = ? WHERE id = ?',
+      [endTimeFormatted, id]
+    );
+    
     const updatedAuction = await Auction.findById(id);
     
     res.json({
@@ -795,12 +1208,13 @@ exports.joinAsAuctioneer = async (req, res) => {
       });
     }
     
-    if (auction.created_by !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Only auction creator can join as auctioneer'
-      });
-    }
+    // REMOVED THE CREATOR CHECK - Now anyone can join as auctioneer
+    // if (auction.created_by !== userId) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: 'Only auction creator can join as auctioneer'
+    //   });
+    // }
     
     if (auction.status !== 'live') {
       return res.status(400).json({
@@ -838,12 +1252,12 @@ exports.downloadReport = async (req, res) => {
       });
     }
     
-    if (auction.created_by !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Only auction creator can download the report'
-      });
-    }
+    // if (auction.created_by !== userId) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: 'Only auction creator can download the report'
+    //   });
+    // }
     
     if (auction.status !== 'completed') {
       return res.status(400).json({
@@ -861,8 +1275,8 @@ exports.downloadReport = async (req, res) => {
     const csvData = [
       ['Auction Report', '', '', ''],
       ['Auction Title:', auction.title, 'Auction No:', `AUC${id.toString().padStart(3, '0')}`],
-      ['Date & Time:', `${auction.auction_date} at ${auction.start_time}`, 'Currency:', auction.currency],
-      ['Base Price:', auction.base_price, 'Final Price:', auction.current_price],
+      ['Date & Time:', `${auction.auction_date} at ${formatTimeToAMPM(auction.start_time)}`, 'Currency:', auction.currency],
+      ['Decremental Value:', auction.decremental_value, 'Final Price:', auction.current_price],
       ['', '', '', ''],
       ['Participants:', '', '', ''],
       ['Name', 'Phone', 'Company', 'Status']
@@ -913,4 +1327,3 @@ exports.downloadReport = async (req, res) => {
     });
   }
 };
-

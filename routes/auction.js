@@ -25,6 +25,9 @@ router.post('/join', auctionController.joinAuction);
 // router.get('/dashboard/stats', auctionController.getUserDashboard);
 router.get('/list/filtered', auctionController.getFilteredAuctions);
 router.post('/:id/start', auctionController.startAuction);
+// Extend auction time
+router.put('/:id/extend', auctionController.extendAuctionTime);
+
 router.post('/:id/join-auctioneer', auctionController.joinAsAuctioneer);
 router.get('/:id/report', auctionController.downloadReport);
 

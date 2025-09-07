@@ -15,6 +15,7 @@ const adminRoutes = require('./routes/adminRoutes');
 const adminUserRoutes = require('./routes/adminUserRoutes');
 const adminAuctionRoutes = require('./routes/admin-auction-routes');
 const adminReportsRoutes = require('./routes/adminReportsRoutes');
+// const { initWebSocketServer } = require('./controllers/auctionController');
 
 const app = express();
 const server = http.createServer(app);
@@ -25,9 +26,17 @@ const io = new Server(server, {
     credentials: true
   }
 });
+// // After creating HTTP server
+// initWebSocketServer(server);
 
 // Store active auctions and connections
 const activeAuctions = new Map();
+
+// Start automatic status updates
+if (process.env.NODE_ENV !== 'test') {
+  require('./cron/auctionStatusUpdater');
+  console.log('🔄 Automatic auction status updates enabled');
+}
 
 // Middleware
 app.use(cors({
