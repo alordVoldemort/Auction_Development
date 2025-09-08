@@ -203,7 +203,6 @@ exports.getAdminDashboard = async (req, res) => {
         a.title,
         a.auction_date,
         a.start_time,
-        a.base_price,
         a.currency,
         u.company_name as creator_company,
         COUNT(ap.id) as participant_count
@@ -230,7 +229,6 @@ exports.getAdminDashboard = async (req, res) => {
         minute: '2-digit',
         hour12: true
       }),
-      base_price: `${auction.currency} ${auction.base_price?.toLocaleString('en-IN')}`,
       auction_no: `AUC${auction.id.toString().padStart(3, '0')}`
     }));
 
