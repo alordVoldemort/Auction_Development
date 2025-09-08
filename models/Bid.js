@@ -43,6 +43,36 @@ class Bid {
     }
   }
 
+  // NEW: Set winning bid for an entire auction (real-time winner determination)
+  static async setWinningBidForAuction(auctionId) {
+    try {
+      // First reset all winning bids for this auction
+      await db.query(
+        'UPDATE bids SET is_winning = 0 WHERE auction_id = ?',
+        [auctionId]
+      );
+      
+      // Set the lowest bid as winning (for decremental auction)
+      const [result] = await db.query(`
+        UPDATE bids 
+        SET is_winning = 1 
+        WHERE id = (
+          SELECT id FROM (
+            SELECT id FROM bids 
+            WHERE auction_id = ? 
+            ORDER BY amount ASC, bid_time ASC 
+            LIMIT 1
+          ) AS temp
+        )
+      `, [auctionId]);
+      
+      return result.affectedRows > 0;
+    } catch (error) {
+      console.error('Error setting winning bid for auction:', error);
+      throw error;
+    }
+  }
+
   static async setWinningBid(bidId) {
     try {
       // First reset all winning bids for this auction
