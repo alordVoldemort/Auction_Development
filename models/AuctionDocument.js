@@ -2,15 +2,18 @@ const db = require('../db');
 
 class AuctionDocument {
   static async add(documentData) {
-    const { auction_id, file_name, file_path, file_type } = documentData;
-    
-    const [result] = await db.query(
-      'INSERT INTO auction_documents (auction_id, file_name, file_path, file_type) VALUES (?, ?, ?, ?)',
-      [auction_id, file_name, file_path, file_type]
-    );
-    
-    return result.insertId;
-  }
+  const { auction_id, file_name, file_path, file_type } = documentData;
+
+  /* ➜  skip if multer did not give us a real file  */
+  if (!file_name || !file_path) return;
+
+  const [result] = await db.query(
+    'INSERT INTO auction_documents (auction_id, file_name, file_path, file_type) VALUES (?, ?, ?, ?)',
+    [auction_id, file_name, file_path, file_type]
+  );
+
+  return result.insertId;
+}
 
   static async findByAuction(auctionId) {
     const [documents] = await db.query(

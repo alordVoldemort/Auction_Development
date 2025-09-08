@@ -1,12 +1,23 @@
-const axios = require('axios');
+/* --------------  IST locking  -------------- */
+const { formatInTimeZone, toZonedTime } = require('date-fns-tz');
+const TZ   = 'Asia/Kolkata';
+const istYMD = (dt) => formatInTimeZone(dt, TZ, 'yyyy-MM-dd');
+/* ------------------------------------------- */
+
+const axios   = require('axios');
 const Auction = require('../models/Auction');
 const AuctionParticipant = require('../models/AuctionParticipant');
 const AuctionDocument = require('../models/AuctionDocument');
-const Bid = require('../models/Bid');
+const Bid   = require('../models/Bid');
 const { sendSMS } = require('../utils/smsService');
-const db = require('../db');
+const db    = require('../db');
 
-// Helper function to send WhatsApp template messages
+// Enhanced automatic status update system
+let statusUpdateInterval;
+
+// ------------------------------------------------------------------
+// WhatsApp helper
+// ------------------------------------------------------------------
 async function sendWhatsAppMessage(phone, templateName = 'auction_invitations') {
   const token = process.env.WHATSAPP_TOKEN;
   const url = 'https://graph.facebook.com/v22.0/712866835253680/messages';
@@ -15,10 +26,7 @@ async function sendWhatsAppMessage(phone, templateName = 'auction_invitations') 
     messaging_product: "whatsapp",
     to: phone,
     type: "template",
-    template: {
-      name: templateName,
-      language: { code: "en_US" }
-    }
+    template: { name: templateName, language: { code: "en_US" } }
   };
 
   const headers = {
@@ -27,249 +35,204 @@ async function sendWhatsAppMessage(phone, templateName = 'auction_invitations') 
   };
 
   try {
-    const response = await axios.post(url, body, { headers });
-    console.log(`✅ WhatsApp sent to ${phone}:`, response.data);
-    return { success: true, data: response.data };
+    const { data } = await axios.post(url, body, { headers });
+    console.log(`✅ WhatsApp sent to ${phone}:`, data);
+    return { success: true, data };
   } catch (err) {
     console.error(`❌ WhatsApp failed for ${phone}:`, err.response?.data || err.message);
     return { success: false, error: err.response?.data || err.message };
   }
 }
 
-// Helper function to format time in 12-hour format with AM/PM
+// ------------------------------------------------------------------
+// Time format helpers
+// ------------------------------------------------------------------
 function formatTimeToAMPM(timeString) {
   if (!timeString) return '';
-  
-  const [hours, minutes, seconds] = timeString.split(':');
-  const hour = parseInt(hours, 10);
+  let timePart = timeString;
+  if (typeof timeString === 'string' && timeString.includes(' ')) timePart = timeString.split(' ')[1];
+  const [h, m] = timePart.split(':');
+  const hour = parseInt(h, 10);
   const ampm = hour >= 12 ? 'PM' : 'AM';
-  const formattedHour = hour % 12 || 12;
-  
-  return `${formattedHour}:${minutes} ${ampm}`;
+  const fmtH = hour % 12 || 12;
+  return `${fmtH}:${m} ${ampm}`;
 }
 
-// Helper function to calculate end time
 function calculateEndTime(startTime, duration) {
   if (!startTime || !duration) return '';
-  
-  const [hours, minutes] = startTime.split(':');
-  const startDate = new Date();
-  startDate.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0);
-  
-  const endDate = new Date(startDate.getTime() + duration * 1000);
-  const endHours = endDate.getHours();
-  const endMinutes = endDate.getMinutes();
-  const ampm = endHours >= 12 ? 'PM' : 'AM';
-  const formattedHour = endHours % 12 || 12;
-  
-  return `${formattedHour}:${endMinutes.toString().padStart(2, '0')} ${ampm}`;
+  const [h, m] = startTime.split(':');
+  const start = new Date(); start.setHours(parseInt(h, 10), parseInt(m, 10), 0);
+  const end   = new Date(start.getTime() + duration * 1000);
+  const eh = end.getHours(), em = end.getMinutes(), ampm = eh >= 12 ? 'PM' : 'AM';
+  return `${(eh % 12 || 12)}:${em.toString().padStart(2, '0')} ${ampm}`;
 }
 
+// ------------------------------------------------------------------
+// Debug helper
+// ------------------------------------------------------------------
+async function debugAuctionStatus(auctionId) {
+  try {
+    const [rows] = await db.query('SELECT * FROM auctions WHERE id = ?', [auctionId]);
+    if (!rows[0]) return console.log(`❌ Auction ${auctionId} not found`);
+    const a = rows[0];
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    console.log(`\n🔍 DEBUG: Auction ${auctionId} - "${a.title}"`);
+    console.log(`Current status: ${a.status}`);
+    console.log(`Auction date: ${a.auction_date}`);
+    console.log(`Start time: ${a.start_time}`);
+    console.log(`Duration: ${a.duration}s | End time: ${a.end_time}`);
+    console.log(`Server time: ${now}`);
+
+    const [calc] = await db.query(`
+      SELECT TIMESTAMP(auction_date,start_time) as startdt,
+             TIMESTAMP(auction_date,start_time) + INTERVAL duration SECOND as enddt,
+             TIMESTAMP(auction_date,start_time) <= ? as shouldLive,
+             TIMESTAMP(auction_date,start_time) + INTERVAL duration SECOND <= ? as shouldDone
+      FROM auctions WHERE id = ?`, [now, now, auctionId]);
+    console.log(`Calc start: ${calc[0].startdt} | Calc end: ${calc[0].enddt}`);
+    console.log(`Should live: ${calc[0].shouldLive} | Should completed: ${calc[0].shouldDone}`);
+  } catch (e) { console.error('Debug error:', e); }
+}
+
+// ------------------------------------------------------------------
+// Status updater  (IST comparisons)
+// ------------------------------------------------------------------
 async function updateAuctionStatuses() {
+  let conn;
   try {
     console.log('🔄 Auto-updating auction statuses...');
-    const currentTime = new Date();
-    const currentDateTime = currentTime.toISOString().slice(0, 19).replace('T', ' ');
-    
-    console.log('Current UTC time:', currentDateTime);
+    const nowIST = formatInTimeZone(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss');
+    console.log('Current IST now:', nowIST);
 
-    // 1. Update upcoming → live
-    const [upcomingToLive] = await db.query(`
-      UPDATE auctions 
-      SET status = 'live', 
-          end_time = DATE_ADD(CONCAT(auction_date, ' ', start_time), INTERVAL duration SECOND)
-      WHERE status = 'upcoming' 
-      AND CONCAT(auction_date, ' ', start_time) <= ?
-    `, [currentDateTime]);
-    
-    console.log(`Updated ${upcomingToLive.affectedRows} auctions from upcoming to live`);
+    conn = await db.getConnection(); await conn.beginTransaction();
 
-    // 2. Update live → completed (with end_time)
-    const [liveToCompleted] = await db.query(`
-      UPDATE auctions 
-      SET status = 'completed' 
-      WHERE status = 'live' 
-      AND end_time IS NOT NULL 
-      AND end_time <= ?
-    `, [currentDateTime]);
-    
-    console.log(`Updated ${liveToCompleted.affectedRows} auctions from live to completed`);
+    // 1. anything that should already be completed
+    const [toCompleted] = await conn.query(`
+      UPDATE auctions
+      SET status = 'completed'
+      WHERE (status = 'live' OR status = 'upcoming')
+        AND DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration SECOND) <= ?
+    `, [nowIST]);
 
-    // 3. Update live → completed (without end_time)
-    const [liveNoEndTime] = await db.query(`
-      UPDATE auctions 
-      SET status = 'completed' 
-      WHERE status = 'live' 
-      AND end_time IS NULL 
-      AND DATE_ADD(CONCAT(auction_date, ' ', start_time), INTERVAL duration SECOND) <= ?
-    `, [currentDateTime]);
-    
-    console.log(`Updated ${liveNoEndTime.affectedRows} auctions with missing end time`);
+    // 2. upcoming -> live
+    const [upcomingToLive] = await conn.query(`
+      UPDATE auctions
+      SET status = 'live',
+          end_time = DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration SECOND)
+      WHERE status = 'upcoming'
+        AND CONCAT(auction_date,' ',start_time) <= ?
+        AND DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration SECOND) > ?
+    `, [nowIST, nowIST]);
 
-    // 4. DIRECT UPDATE: Upcoming → Completed (for past auctions)
-    const [upcomingToCompleted] = await db.query(`
-      UPDATE auctions 
-      SET status = 'completed',
-          end_time = DATE_ADD(CONCAT(auction_date, ' ', start_time), INTERVAL duration SECOND)
-      WHERE status = 'upcoming' 
-      AND DATE_ADD(CONCAT(auction_date, ' ', start_time), INTERVAL duration SECOND) <= ?
-    `, [currentDateTime]);
-    
-    console.log(`Updated ${upcomingToCompleted.affectedRows} auctions from upcoming to completed`);
-
-    console.log('✅ Auction statuses updated successfully');
-    
-  } catch (error) {
-    console.error('❌ Error updating auction statuses:', error);
-  }
+    await conn.commit();
+    console.log(`✅ Status update done → completed:${toCompleted.affectedRows}  live:${upcomingToLive.affectedRows}`);
+    return { toCompleted: toCompleted.affectedRows, upcomingToLive: upcomingToLive.affectedRows };
+  } catch (err) {
+    if (conn) await conn.rollback();
+    console.error('❌ Status update error:', err); throw err;
+  } finally { if (conn) conn.release(); }
 }
 
-// Run status update on server start and set interval
-setInterval(updateAuctionStatuses, 60000); // Update every minute
+// ------------------------------------------------------------------
+// Cron & graceful shutdown
+// ------------------------------------------------------------------
+function startAutomaticStatusUpdates() {
+  if (statusUpdateInterval) clearInterval(statusUpdateInterval);
+  updateAuctionStatuses().then(r => console.log('✅ Initial status update:', r)).catch(console.error);
+  statusUpdateInterval = setInterval(() => updateAuctionStatuses()
+    .then(r => { if (r.toCompleted || r.upcomingToLive) console.log('🔄 Periodic:', r); })
+    .catch(console.error), 30000);
+  console.log('✅ Auto status updates every 30 s (IST)');
+}
+startAutomaticStatusUpdates();
 
+process.on('SIGINT', () => {
+  if (statusUpdateInterval) { clearInterval(statusUpdateInterval); console.log('❌ Auto updates stopped'); }
+  process.exit(0);
+});
+
+// ------------------------------------------------------------------
+// Manual trigger endpoint
+// ------------------------------------------------------------------
+exports.autoUpdateAuctionStatus = async (req, res) => {
+  try {
+    const { debug_auction_id } = req.query;
+    if (debug_auction_id) await debugAuctionStatus(debug_auction_id);
+    const results = await updateAuctionStatuses();
+    const [rows] = await db.query('SELECT status, COUNT(*) as c FROM auctions GROUP BY status');
+    const counts = rows.reduce((a, { status, c }) => { a[status] = c; return a; }, {});
+    res.json({ success: true, message: 'Manual update done', results, statusCounts: counts, timestamp: new Date() });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, message: 'Update failed', error: e.message });
+  }
+};
+
+// ------------------------------------------------------------------
+// Create auction  (IST calendar day locked)
+// ------------------------------------------------------------------
 exports.createAuction = async (req, res) => {
   try {
     const {
-      title,
-      description,
-      auction_date,
-      start_time,
-      duration,
-      currency,
-      decremental_value,
-      pre_bid_allowed = true,
-      participants,
-      send_invitations = true
+      title, description, auction_date, start_time, duration, currency,
+      decremental_value, pre_bid_allowed = true, participants, send_invitations = true
     } = req.body;
 
-    if (!title || !auction_date || !start_time || !duration || !decremental_value) {
-      return res.status(400).json({
-        success: false,
-        message: 'Title, date, start time, duration, and decremental value are required'
-      });
-    }
+    if (!title || !auction_date || !start_time || !duration || !decremental_value)
+      return res.status(400).json({ success: false, message: 'Required fields missing' });
 
     const created_by = req.user.userId;
 
-    // Create auction - FIXED: Remove the * 60 multiplication
+    // ===== IST LOCK =====  ensure we store the IST calendar day
+    const istDate = toZonedTime(`${auction_date} ${start_time}`, TZ);
+    const finalAuctionDate = istYMD(istDate);
+    // =====================
+
     const auctionId = await Auction.create({
-      title,
-      description,
-      auction_date,
-      start_time,
-      duration: parseInt(duration), // FIXED: Use duration as provided (already in seconds)
+      title, description,
+      auction_date: finalAuctionDate,   // <-- IST date
+      start_time, duration: parseInt(duration),
       currency: currency || 'INR',
       decremental_value: parseFloat(decremental_value),
-      current_price: parseFloat(decremental_value), // Set initial current price to decremental value
+      current_price: parseFloat(decremental_value),
       pre_bid_allowed: pre_bid_allowed === 'true' || pre_bid_allowed === true,
       created_by
     });
 
-    // ✅ CRITICAL: Immediately update status after creation
-    await updateAuctionStatuses();
+    await updateAuctionStatuses();   // immediate status fix
 
-    let participantList = [];
-    let smsCount = 0;
-    let whatsappCount = 0;
-    let failures = [];
-
+    let participantList = [], smsCount = 0, whatsappCount = 0, failures = [];
     if (participants) {
-      participantList = Array.isArray(participants) ? participants : [participants];
-      participantList = [...new Set(participantList)].filter(p => p);
-
-      if (participantList.length > 0) {
-        const participantData = participantList.map(phone => ({
-          user_id: null,
-          phone_number: phone
-        }));
-
-        await AuctionParticipant.addMultiple(auctionId, participantData);
-
+      participantList = [...new Set(Array.isArray(participants) ? participants : [participants])].filter(Boolean);
+      if (participantList.length) {
+        await AuctionParticipant.addMultiple(auctionId, participantList.map(p => ({ user_id: null, phone_number: p })));
         if (send_invitations === 'true' || send_invitations === true) {
-          // ✅ Get the UPDATED auction status after the update
           const auction = await Auction.findById(auctionId);
           const auctionDate = new Date(auction.auction_date).toLocaleDateString('en-IN');
-          const message = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register`;
-
-          console.log(`📨 Preparing to send invitations to ${participantList.length} participant(s)`);
-
-          // Loop through participants
-          for (const participant of participantList) {
-            // Send SMS
-            try {
-              console.log(`📤 Sending SMS to: ${participant}`);
-              await sendSMS(participant, message, true);
-              console.log(`✅ SMS sent to: ${participant}`);
-              smsCount++;
-            } catch (smsError) {
-              console.error(`❌ SMS failed to ${participant}:`, smsError.message);
-              failures.push({ participant, type: 'SMS', error: smsError.message });
-            }
-
-            // Send WhatsApp
-            try {
-              console.log(`📤 Sending WhatsApp to: ${participant}`);
-              const result = await sendWhatsAppMessage(participant, 'auction_invitations');
-              if (result.success) whatsappCount++;
-              else failures.push({ participant, type: 'WhatsApp', error: result.error });
-            } catch (waError) {
-              console.error(`❌ WhatsApp failed to ${participant}:`, waError.message);
-              failures.push({ participant, type: 'WhatsApp', error: waError.message });
-            }
-
-            // Small delay to prevent rate limiting
-            await new Promise(resolve => setTimeout(resolve, 500));
+          const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register`;
+          for (const p of participantList) {
+            try { await sendSMS(p, msg, true); smsCount++; } catch (e) { failures.push({ participant: p, type: 'SMS', error: e.message }); }
+            try { const w = await sendWhatsAppMessage(p, 'auction_invitations'); if (w.success) whatsappCount++; else failures.push({ participant: p, type: 'WhatsApp', error: w.error }); } catch (e) { failures.push({ participant: p, type: 'WhatsApp', error: e.message }); }
+            await new Promise(r => setTimeout(r, 500));
           }
         }
       }
     }
 
-    // Handle uploaded files
-    if (req.files && req.files.length > 0) {
-      for (const file of req.files) {
-        await AuctionDocument.add({
-          auction_id: auctionId,
-          file_name: file.originalname,
-          file_path: file.path,
-          file_type: file.mimetype
-        });
-      }
+    if (req.files?.length) {
+      for (const file of req.files) await AuctionDocument.add({ auction_id: auctionId, ...file });
     }
 
-    // ✅ Get the UPDATED auction status after the update
     const auction = await Auction.findById(auctionId);
-    const formattedStartTime = formatTimeToAMPM(auction.start_time);
-    const formattedEndTime = calculateEndTime(auction.start_time, auction.duration);
-
-    // Prepare response message
-    let responseMessage = `Auction created successfully with ${participantList.length} participant(s)`;
-    if (smsCount > 0) responseMessage += `, ${smsCount} SMS sent`;
-    if (whatsappCount > 0) responseMessage += `, ${whatsappCount} WhatsApp sent`;
-    if (failures.length > 0) responseMessage += `, ${failures.length} invitation(s) failed`;
-
     res.status(201).json({
       success: true,
-      message: responseMessage,
-      auction: {
-        ...auction,
-        formatted_start_time: formattedStartTime,
-        formatted_end_time: formattedEndTime
-      },
-      invitationResults: {
-        totalParticipants: participantList.length,
-        successfulSMS: smsCount,
-        successfulWhatsApp: whatsappCount,
-        failures
-      }
+      message: `Auction created with ${participantList.length} participant(s)${smsCount ? `, ${smsCount} SMS` : ''}${whatsappCount ? `, ${whatsappCount} WhatsApp` : ''}${failures.length ? `, ${failures.length} failed` : ''}`,
+      auction: { ...auction, formatted_start_time: formatTimeToAMPM(auction.start_time), formatted_end_time: calculateEndTime(auction.start_time, auction.duration) },
+      invitationResults: { totalParticipants: participantList.length, successfulSMS: smsCount, successfulWhatsApp: whatsappCount, failures }
     });
-
-  } catch (error) {
-    console.error('❌ Create auction error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+  } catch (e) {
+    console.error('❌ Create auction:', e);
+    res.status(500).json({ success: false, message: 'Server error', error: e.message });
   }
 };
 
@@ -390,26 +353,36 @@ exports.getAuctionDetails = async (req, res) => {
 
     // Safe time formatting functions
     const safeFormatTimeToAMPM = (timeValue) => {
-      if (!timeValue) return '';
-      
-      try {
-        // Handle datetime format (e.g., "2024-01-01 14:30:00")
-        let timeString = timeValue;
-        if (typeof timeValue === 'string' && timeValue.includes(' ')) {
-          timeString = timeValue.split(' ')[1]; // Extract time part
-        }
-        
-        const [hours, minutes] = timeString.split(':');
-        const hour = parseInt(hours, 10);
-        const ampm = hour >= 12 ? 'PM' : 'AM';
-        const formattedHour = hour % 12 || 12;
-        
-        return `${formattedHour}:${minutes} ${ampm}`;
-      } catch (error) {
-        console.error('Error formatting time:', error);
-        return '';
-      }
-    };
+  if (!timeValue) return '';
+  
+  try {
+    let dateObj;
+    
+    if (typeof timeValue === 'string' && (timeValue.includes('T') || timeValue.includes(' '))) {
+      // Convert UTC datetime to IST
+      dateObj = toZonedTime(new Date(timeValue), 'Asia/Kolkata');
+    } else if (typeof timeValue === 'string') {
+      // Handle time-only strings
+      const [hours, minutes, seconds] = timeValue.split(':');
+      dateObj = new Date();
+      dateObj.setHours(parseInt(hours, 10), parseInt(minutes, 10), parseInt(seconds || 0, 10));
+    } else if (timeValue instanceof Date) {
+      dateObj = toZonedTime(timeValue, 'Asia/Kolkata');
+    } else {
+      return '';
+    }
+    
+    const hours = dateObj.getHours();
+    const minutes = dateObj.getMinutes();
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const formattedHour = hours % 12 || 12;
+    
+    return `${formattedHour}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+  } catch (error) {
+    console.error('Error formatting time:', error);
+    return '';
+  }
+};
 
     const safeCalculateEndTime = (startTime, duration) => {
       if (!startTime || !duration) return '';
@@ -438,8 +411,6 @@ exports.getAuctionDetails = async (req, res) => {
       auction_no: `AUC${auction.id.toString().padStart(3, '0')}`,
       formatted_start_time: safeFormatTimeToAMPM(auction.start_time),
       formatted_end_time: auction.end_time ? safeFormatTimeToAMPM(auction.end_time) : safeCalculateEndTime(auction.start_time, auction.duration),
-      time_status: timeStatus,
-      time_value: timeValue,
       time_remaining: timeRemaining,
       is_creator: isCreator,
       has_joined: isParticipant,
@@ -447,7 +418,7 @@ exports.getAuctionDetails = async (req, res) => {
       creator_info: creator ? {
         company_name: creator.company_name,
         person_name: creator.person_name,
-        phone: creator.phone
+        phone: creator.phone_number   
       } : null,
       winner_info: winner ? {
         user_id: winner.user_id,
@@ -509,21 +480,7 @@ exports.getAuctionDetails = async (req, res) => {
 async function getUserById(userId) {
   try {
     const [users] = await db.query(
-      'SELECT id, company_name, person_name, phone FROM users WHERE id = ?',
-      [userId]
-    );
-    return users[0] || null;
-  } catch (error) {
-    console.error('Error getting user:', error);
-    return null;
-  }
-}
-
-// Helper function to get user by ID (add this to your user model or utils)
-async function getUserById(userId) {
-  try {
-    const [users] = await db.query(
-      'SELECT id, company_name, person_name, phone FROM users WHERE id = ?',
+      'SELECT id, company_name, person_name, phone_number FROM users WHERE id = ?',
       [userId]
     );
     return users[0] || null;
@@ -738,10 +695,10 @@ exports.extendAuctionTime = async (req, res) => {
     }
 
     // Allow both live and upcoming auctions to be extended
-    if (auction.status !== 'live' && auction.status !== 'upcoming') {
+    if (auction.status !== 'live') {
       return res.status(400).json({
         success: false,
-        message: 'Only live or upcoming auctions can be extended'
+        message: 'Only live auctions can be extended'
       });
     }
 
@@ -889,7 +846,7 @@ exports.addParticipants = async (req, res) => {
 
     const participantData = participantList.map(phone => ({
       user_id: null,
-      phone_number: phone
+      phone_number: phone_number   
     }));
 
     const addedCount = await AuctionParticipant.addMultiple(auction_id, participantData);
@@ -1279,7 +1236,7 @@ exports.downloadReport = async (req, res) => {
       ['Decremental Value:', auction.decremental_value, 'Final Price:', auction.current_price],
       ['', '', '', ''],
       ['Participants:', '', '', ''],
-      ['Name', 'Phone', 'Company', 'Status']
+      ['Name', 'phone_number', 'Company', 'Status']
     ];
     
     participants.forEach(p => {
@@ -1327,3 +1284,11 @@ exports.downloadReport = async (req, res) => {
     });
   }
 };
+
+async function getUserById(userId) {
+  const [rows] = await db.query(
+    'SELECT id, company_name, person_name, phone_number FROM users WHERE id = ?',
+    [userId]
+  );
+  return rows[0] || null;
+}
