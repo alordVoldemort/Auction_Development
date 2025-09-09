@@ -47,25 +47,52 @@ async function sendWhatsAppMessage(phone, templateName = 'auction_invitations') 
 // ------------------------------------------------------------------
 // Time format helpers
 // ------------------------------------------------------------------
-function formatTimeToAMPM(timeString) {
-  if (!timeString) return '';
-  let timePart = timeString;
-  if (typeof timeString === 'string' && timeString.includes(' ')) timePart = timeString.split(' ')[1];
-  const [h, m] = timePart.split(':');
-  const hour = parseInt(h, 10);
+function formatTimeToAMPM(timeValue) {
+  if (!timeValue) return '';
+
+  let hours, minutes;
+
+  if (typeof timeValue === 'string') {
+    // If it's a string like "2025-09-09 17:30:00" or "17:30:00"
+    let timePart = timeValue.includes(' ') ? timeValue.split(' ')[1] : timeValue;
+    [hours, minutes] = timePart.split(':');
+  } else if (timeValue instanceof Date) {
+    hours = timeValue.getHours();
+    minutes = timeValue.getMinutes();
+  } else {
+    return '';
+  }
+
+  const hour = parseInt(hours, 10);
   const ampm = hour >= 12 ? 'PM' : 'AM';
   const fmtH = hour % 12 || 12;
-  return `${fmtH}:${m} ${ampm}`;
+
+  return `${fmtH}:${minutes.toString().padStart(2, '0')} ${ampm}`;
 }
 
 function calculateEndTime(startTime, duration) {
   if (!startTime || !duration) return '';
-  const [h, m] = startTime.split(':');
-  const start = new Date(); start.setHours(parseInt(h, 10), parseInt(m, 10), 0);
-  const end   = new Date(start.getTime() + duration * 1000);
-  const eh = end.getHours(), em = end.getMinutes(), ampm = eh >= 12 ? 'PM' : 'AM';
+
+  let start;
+
+  if (typeof startTime === 'string') {
+    const [h, m] = startTime.split(':');
+    start = new Date();
+    start.setHours(parseInt(h, 10), parseInt(m, 10), 0);
+  } else if (startTime instanceof Date) {
+    start = new Date(startTime);
+  } else {
+    return '';
+  }
+
+  const end = new Date(start.getTime() + duration * 1000);
+  const eh = end.getHours();
+  const em = end.getMinutes();
+  const ampm = eh >= 12 ? 'PM' : 'AM';
+
   return `${(eh % 12 || 12)}:${em.toString().padStart(2, '0')} ${ampm}`;
 }
+
 
 // ------------------------------------------------------------------
 // Debug helper
