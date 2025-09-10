@@ -2,8 +2,10 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
 require('dotenv').config();
+
 
 const authRoutes = require('./routes/user-auth-routes');
 const auctionRoutes = require('./routes/auction');
@@ -60,6 +62,9 @@ app.use('/api/fulldashboard', adminRoutes);
 app.use('/api/user/admin', adminUserRoutes);
 app.use('/api/admin/auctions', adminAuctionRoutes);
 app.use('/api/admin/reports', adminReportsRoutes);
+
+
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Health check endpoint
 app.get('/health', (req, res) => {

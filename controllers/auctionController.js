@@ -217,7 +217,7 @@ exports.createAuction = async (req, res) => {
 
     const auctionId = await Auction.create({
       title, description,
-      auction_date: finalAuctionDate,   // <-- IST date
+      auction_date: finalAuctionDate,
       start_time, duration: parseInt(duration),
       currency: currency || 'INR',
       decremental_value: parseFloat(decremental_value),
@@ -226,7 +226,7 @@ exports.createAuction = async (req, res) => {
       created_by
     });
 
-    await updateAuctionStatuses();   // immediate status fix
+    await updateAuctionStatuses();
 
     let participantList = [], smsCount = 0, whatsappCount = 0, failures = [];
     if (participants) {
@@ -236,7 +236,7 @@ exports.createAuction = async (req, res) => {
         if (send_invitations === 'true' || send_invitations === true) {
           const auction = await Auction.findById(auctionId);
           const auctionDate = new Date(auction.auction_date).toLocaleDateString('en-IN');
-          const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register`;
+          const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register `;
           for (const p of participantList) {
             try { await sendSMS(p, msg, true); smsCount++; } catch (e) { failures.push({ participant: p, type: 'SMS', error: e.message }); }
             try { const w = await sendWhatsAppMessage(p, 'auction_invitations'); if (w.success) whatsappCount++; else failures.push({ participant: p, type: 'WhatsApp', error: w.error }); } catch (e) { failures.push({ participant: p, type: 'WhatsApp', error: e.message }); }
@@ -246,16 +246,36 @@ exports.createAuction = async (req, res) => {
       }
     }
 
+    // -------------  DOCUMENT HANDLING  -------------
+    let uploadedDocs = [];
     if (req.files?.length) {
-      for (const file of req.files) await AuctionDocument.add({ auction_id: auctionId, ...file });
+      for (const file of req.files) {
+        const docId = await AuctionDocument.add({
+          auction_id: auctionId,
+          file_name: file.originalname,
+          file_path: file.path,
+          file_type: file.mimetype,
+          file_size: file.size
+        });
+        // build clickable preview URL
+        const fileUrl = `${req.protocol}://${req.get('host')}/${file.path.replace(/\\/g, '/')}`;
+        uploadedDocs.push({
+          id: docId,
+          file_name: file.originalname,
+          file_url: fileUrl,
+          file_type: file.mimetype
+        });
+      }
     }
+    // ---------------------------------------------
 
     const auction = await Auction.findById(auctionId);
     res.status(201).json({
       success: true,
-      message: `Auction created with ${participantList.length} participant(s)${smsCount ? `, ${smsCount} SMS` : ''}${whatsappCount ? `, ${whatsappCount} WhatsApp` : ''}${failures.length ? `, ${failures.length} failed` : ''}`,
+      message: `Auction created with ${participantList.length} participant(s)${smsCount ? `, ${smsCount} SMS` : ''}${whatsappCount ? `, ${whatsappCount} WhatsApp` : ''}${failures.length ? `, ${failures.length} failed` : ''}${uploadedDocs.length ? `, ${uploadedDocs.length} document(s) uploaded` : ''}`,
       auction: { ...auction, formatted_start_time: formatTimeToAMPM(auction.start_time), formatted_end_time: calculateEndTime(auction.start_time, auction.duration) },
-      invitationResults: { totalParticipants: participantList.length, successfulSMS: smsCount, successfulWhatsApp: whatsappCount, failures }
+      invitationResults: { totalParticipants: participantList.length, successfulSMS: smsCount, successfulWhatsApp: whatsappCount, failures },
+      documents: uploadedDocs
     });
   } catch (e) {
     console.error('❌ Create auction:', e);
@@ -475,7 +495,7 @@ exports.getAuctionDetails = async (req, res) => {
       documents: documents.map(d => ({
         id: d.id,
         file_name: d.file_name,
-        file_path: d.file_path,
+        file_url: `${req.protocol}://${req.get('host')}/${d.file_path.replace(/\\/g, '/')}`,
         file_type: d.file_type,
         uploaded_at: d.uploaded_at
       })),
@@ -928,38 +948,40 @@ exports.addParticipants = async (req, res) => {
 exports.getParticipants = async (req, res) => {
   try {
     const { auction_id } = req.params;
-    const userId = req.user.userId;
 
+    // basic validation
     const auction = await Auction.findById(auction_id);
-    if (!auction) {
-      return res.status(404).json({
-        success: false,
-        message: 'Auction not found'
-      });
-    }
+    if (!auction)
+      return res.status(404).json({ success: false, message: 'Auction not found' });
 
-    // if (auction.created_by !== userId) {
-    //   return res.status(403).json({
-    //     success: false,
-    //     message: 'Only auction creator can view participants'
-    //   });
-    // }
+    /* ---------- auctioneer (creator) ---------- */
+    const auctioneer = await getUserById(auction.created_by); // {id, company_name, person_name, phone_number}
+    const auctioneerData = {
+      id: 0,
+      auction_id: Number(auction_id),
+      user_id: auction.created_by,
+      phone_number: auctioneer?.phone_number || '',
+      status: 'auctioneer',
+      invited_at: null,
+      joined_at: null,
+      company_name: auctioneer?.company_name || null,
+      person_name: auctioneer?.person_name || null
+    };
 
+    /* ---------- invited / joined users ---------- */
     const participants = await AuctionParticipant.findByAuction(auction_id);
 
+    /* ---------- response ---------- */
     res.json({
       success: true,
+      auctioneer: auctioneerData,
       participants,
-      count: participants.length
+      count: participants.length          // ONLY invited/joined people
     });
 
   } catch (error) {
     console.error('❌ Get participants error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
