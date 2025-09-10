@@ -112,13 +112,29 @@ exports.getAuctionReport = async (req, res) => {
 };
 // Get all auctions for dropdown
 exports.getAllAuctions = async (req, res) => {
-    try {
-        const [auctions] = await db.query(
-            "SELECT id, title FROM auctions ORDER BY auction_date DESC"
-        );
-        res.json(auctions);
-    } catch (err) {
-        console.error("Error fetching auctions:", err);
-        res.status(500).json({ message: "Internal server error" });
+  try {
+    const userId = req.query.userId; // ?userId=123
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "userId is required" });
     }
+
+    const query = `
+      SELECT a.id, a.title, a.status, a.auction_date, a.start_time, 'created' as auction_type
+      FROM auctions a WHERE a.created_by = ?
+      UNION
+      SELECT a.id, a.title, a.status, a.auction_date, a.start_time, 'participated' as auction_type
+      FROM auctions a INNER JOIN bids b ON a.id = b.auction_id WHERE b.user_id = ?
+      UNION
+      SELECT a.id, a.title, a.status, a.auction_date, a.start_time, 'invited' as auction_type
+      FROM auctions a INNER JOIN auction_participants ap ON a.id = ap.auction_id WHERE ap.user_id = ?
+      ORDER BY auction_date DESC, start_time DESC
+    `;
+
+    const [auctions] = await db.query(query, [userId, userId, userId]);
+
+    res.json({ success: true, auctions, count: auctions.length });
+  } catch (err) {
+    console.error("Error fetching auctions:", err);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
 };

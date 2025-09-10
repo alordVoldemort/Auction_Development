@@ -26,7 +26,7 @@
     "mysql2": "^3.6.5",
     "node-cron": "^4.2.1",
     "socket.io": "^4.8.1",
-    "twilio": "^5.8.2",
+    "twilio": "^5.9.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {

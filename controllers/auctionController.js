@@ -9,7 +9,8 @@ const Auction = require('../models/Auction');
 const AuctionParticipant = require('../models/AuctionParticipant');
 const AuctionDocument = require('../models/AuctionDocument');
 const Bid   = require('../models/Bid');
-const { sendSMS } = require('../utils/smsService');
+// const { sendSMS } = require('../utils/smsService');
+const { sendTwilioSMS } = require('../utils/twilio');
 const db    = require('../db');
 
 // Enhanced automatic status update system
@@ -236,10 +237,21 @@ exports.createAuction = async (req, res) => {
         if (send_invitations === 'true' || send_invitations === true) {
           const auction = await Auction.findById(auctionId);
           const auctionDate = new Date(auction.auction_date).toLocaleDateString('en-IN');
-          const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register `;
+          const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register  `;
           for (const p of participantList) {
-            try { await sendSMS(p, msg, true); smsCount++; } catch (e) { failures.push({ participant: p, type: 'SMS', error: e.message }); }
-            try { const w = await sendWhatsAppMessage(p, 'auction_invitations'); if (w.success) whatsappCount++; else failures.push({ participant: p, type: 'WhatsApp', error: w.error }); } catch (e) { failures.push({ participant: p, type: 'WhatsApp', error: e.message }); }
+            try { 
+              await sendTwilioSMS(p, msg); 
+              smsCount++; 
+            } catch (e) { 
+              failures.push({ participant: p, type: 'SMS', error: e.message }); 
+            }
+            try { 
+              const w = await sendWhatsAppMessage(p, 'auction_invitations'); 
+              if (w.success) whatsappCount++; 
+              else failures.push({ participant: p, type: 'WhatsApp', error: w.error }); 
+            } catch (e) { 
+              failures.push({ participant: p, type: 'WhatsApp', error: e.message }); 
+            }
             await new Promise(r => setTimeout(r, 500));
           }
         }
@@ -908,7 +920,7 @@ exports.addParticipants = async (req, res) => {
 
         for (const participant of participantList) {
           try {
-            await sendSMS(participant, message, true);
+            await sendTwilioSMS(p, msg);
             smsCount++;
           } catch (smsError) {
             console.error(`❌ Failed to send to ${participant}:`, smsError.message);
