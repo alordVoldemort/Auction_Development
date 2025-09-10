@@ -211,9 +211,10 @@ exports.createAuction = async (req, res) => {
 
     const created_by = req.user.userId;
 
-    // ===== IST LOCK =====  ensure we store the IST calendar day
-    const istDate = toZonedTime(`${auction_date} ${start_time}`, TZ);
-    const finalAuctionDate = istYMD(istDate);
+    // Ensure the user-selected date/time is treated as Asia/Kolkata
+const istDateStr = `${auction_date} ${start_time}`; // e.g. "2025-09-10 18:00:00"
+const istDate = toZonedTime(istDateStr, TZ); // parses as IST, not UTC
+const finalAuctionDate = formatInTimeZone(istDate, TZ, 'yyyy-MM-dd'); // stays 2025-09-10
     // =====================
 
    const auctionId = await Auction.create({
@@ -231,7 +232,7 @@ exports.createAuction = async (req, res) => {
 
     await updateAuctionStatuses();
 
-    let participantList = [], smsCount = 0, whatsappCount = 0, failures = [];
+    let participantList = [], smsCount = 0, failures = [];
     if (participants) {
       participantList = [...new Set(Array.isArray(participants) ? participants : [participants])].filter(Boolean);
       if (participantList.length) {
@@ -247,13 +248,13 @@ exports.createAuction = async (req, res) => {
             } catch (e) { 
               failures.push({ participant: p, type: 'SMS', error: e.message }); 
             }
-            try { 
-              const w = await sendWhatsAppMessage(p, 'auction_invitations'); 
-              if (w.success) whatsappCount++; 
-              else failures.push({ participant: p, type: 'WhatsApp', error: w.error }); 
-            } catch (e) { 
-              failures.push({ participant: p, type: 'WhatsApp', error: e.message }); 
-            }
+            // try { 
+            //   const w = await sendWhatsAppMessage(p, 'auction_invitations'); 
+            //   if (w.success) whatsappCount++; 
+            //   else failures.push({ participant: p, type: 'WhatsApp', error: w.error }); 
+            // } catch (e) { 
+            //   failures.push({ participant: p, type: 'WhatsApp', error: e.message }); 
+            // }
             await new Promise(r => setTimeout(r, 500));
           }
         }
@@ -286,9 +287,9 @@ exports.createAuction = async (req, res) => {
     const auction = await Auction.findById(auctionId);
     res.status(201).json({
       success: true,
-      message: `Auction created with ${participantList.length} participant(s)${smsCount ? `, ${smsCount} SMS` : ''}${whatsappCount ? `, ${whatsappCount} WhatsApp` : ''}${failures.length ? `, ${failures.length} failed` : ''}${uploadedDocs.length ? `, ${uploadedDocs.length} document(s) uploaded` : ''}`,
+      message: `Auction created with ${participantList.length} participant(s)${smsCount ? `, ${smsCount} SMS` : ''}}`,
       auction: { ...auction, formatted_start_time: formatTimeToAMPM(auction.start_time), formatted_end_time: calculateEndTime(auction.start_time, auction.duration) },
-      invitationResults: { totalParticipants: participantList.length, successfulSMS: smsCount, successfulWhatsApp: whatsappCount, failures },
+      invitationResults: { totalParticipants: participantList.length, successfulSMS: smsCount },
       documents: uploadedDocs
     });
   } catch (e) {
