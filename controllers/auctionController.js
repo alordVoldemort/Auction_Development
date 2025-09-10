@@ -86,7 +86,7 @@ function calculateEndTime(startTime, duration) {
     return '';
   }
 
-  const end = new Date(start.getTime() + duration * 1000);
+  const end = new Date(start.getTime() + duration * 60 * 1000); // duration is in minutes
   const eh = end.getHours();
   const em = end.getMinutes();
   const ampm = eh >= 12 ? 'PM' : 'AM';
@@ -216,16 +216,18 @@ exports.createAuction = async (req, res) => {
     const finalAuctionDate = istYMD(istDate);
     // =====================
 
-    const auctionId = await Auction.create({
-      title, description,
-      auction_date: finalAuctionDate,
-      start_time, duration: parseInt(duration),
-      currency: currency || 'INR',
-      decremental_value: parseFloat(decremental_value),
-      current_price: parseFloat(decremental_value),
-      pre_bid_allowed: pre_bid_allowed === 'true' || pre_bid_allowed === true,
-      created_by
-    });
+   const auctionId = await Auction.create({
+  title,
+  description,
+  auction_date: finalAuctionDate,
+  start_time,
+  duration: parseInt(duration), // <-- now in minutes
+  currency: currency || 'INR',
+  decremental_value: parseFloat(decremental_value),
+  current_price: parseFloat(decremental_value),
+  pre_bid_allowed: pre_bid_allowed === 'true' || pre_bid_allowed === true,
+  created_by
+});
 
     await updateAuctionStatuses();
 
@@ -762,7 +764,7 @@ exports.extendAuctionTime = async (req, res) => {
     }
 
     // Calculate new duration
-    const newDuration = auction.duration + (additional_minutes * 60);
+    const newDuration = auction.duration + additional_minutes; // both in minutes
     
     if (auction.status === 'upcoming') {
       // For upcoming auctions: update duration only
