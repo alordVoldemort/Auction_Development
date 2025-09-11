@@ -206,62 +206,72 @@ exports.createAuction = async (req, res) => {
       decremental_value, pre_bid_allowed = true, participants, send_invitations = true
     } = req.body;
 
+    // 1. basic required fields
     if (!title || !auction_date || !start_time || !duration || !decremental_value)
       return res.status(400).json({ success: false, message: 'Required fields missing' });
 
+    // 2. block illegal 24-hr times before they hit MySQL
+    const timeRE = /^([01]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/;
+    if (!timeRE.test(start_time))
+      return res.status(400).json({ success: false, message: 'start_time must be valid HH:MM:SS (00-23)' });
+
     const created_by = req.user.userId;
 
-    // Ensure the user-selected date/time is treated as Asia/Kolkata
-const istDateStr = `${auction_date} ${start_time}`; // e.g. "2025-09-10 18:00:00"
-const istDate = toZonedTime(istDateStr, TZ); // parses as IST, not UTC
-const finalAuctionDate = formatInTimeZone(istDate, TZ, 'yyyy-MM-dd'); // stays 2025-09-10
-    // =====================
+    // 3. lock the chosen calendar day to Asia/Kolkata
+    const istDateStr = `${auction_date} ${start_time}`;
+    const istDate    = toZonedTime(istDateStr, TZ);
+    const finalAuctionDate = formatInTimeZone(istDate, TZ, 'yyyy-MM-dd');
 
-   const auctionId = await Auction.create({
-  title,
-  description,
-  auction_date: finalAuctionDate,
-  start_time,
-  duration: parseInt(duration), // <-- now in minutes
-  currency: currency || 'INR',
-  decremental_value: parseFloat(decremental_value),
-  current_price: parseFloat(decremental_value),
-  pre_bid_allowed: pre_bid_allowed === 'true' || pre_bid_allowed === true,
-  created_by
-});
+    // 4. create auction
+    const auctionId = await Auction.create({
+      title,
+      description,
+      auction_date: finalAuctionDate,
+      start_time,
+      duration: parseInt(duration, 10),      // minutes
+      currency: currency || 'INR',
+      decremental_value: parseFloat(decremental_value),
+      current_price: parseFloat(decremental_value),
+      pre_bid_allowed: pre_bid_allowed === 'true' || pre_bid_allowed === true,
+      created_by
+    });
 
+    // 5. run status updater once so new row is set to 'upcoming'
     await updateAuctionStatuses();
 
-    let participantList = [], smsCount = 0, failures = [];
+    /* ---------------  PARTICIPANT & SMS LOGIC  --------------- */
+    let participantList = [];
+    let smsCount = 0;
+    const failures = [];
+
     if (participants) {
-      participantList = [...new Set(Array.isArray(participants) ? participants : [participants])].filter(Boolean);
+      participantList = [
+        ...new Set(
+          Array.isArray(participants) ? participants : [participants]
+        )
+      ].filter(Boolean);
+
       if (participantList.length) {
-        await AuctionParticipant.addMultiple(auctionId, participantList.map(p => ({ user_id: null, phone_number: p })));
+        await AuctionParticipant.addMultiple(
+          auctionId,
+          participantList.map(p => ({ user_id: null, phone_number: p }))
+        );
+
         if (send_invitations === 'true' || send_invitations === true) {
           const auction = await Auction.findById(auctionId);
           const auctionDate = new Date(auction.auction_date).toLocaleDateString('en-IN');
-          const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register  `;
+          const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register`;
+
           for (const p of participantList) {
-            try { 
-              await sendTwilioSMS(p, msg); 
-              smsCount++; 
-            } catch (e) { 
-              failures.push({ participant: p, type: 'SMS', error: e.message }); 
-            }
-            // try { 
-            //   const w = await sendWhatsAppMessage(p, 'auction_invitations'); 
-            //   if (w.success) whatsappCount++; 
-            //   else failures.push({ participant: p, type: 'WhatsApp', error: w.error }); 
-            // } catch (e) { 
-            //   failures.push({ participant: p, type: 'WhatsApp', error: e.message }); 
-            // }
+            try { await sendTwilioSMS(p, msg); smsCount++; }
+            catch (e) { failures.push({ participant: p, type: 'SMS', error: e.message }); }
             await new Promise(r => setTimeout(r, 500));
           }
         }
       }
     }
 
-    // -------------  DOCUMENT HANDLING  -------------
+    /* ---------------  DOCUMENT UPLOADS  --------------- */
     let uploadedDocs = [];
     if (req.files?.length) {
       for (const file of req.files) {
@@ -272,29 +282,27 @@ const finalAuctionDate = formatInTimeZone(istDate, TZ, 'yyyy-MM-dd'); // stays 2
           file_type: file.mimetype,
           file_size: file.size
         });
-        // build clickable preview URL
         const fileUrl = `${req.protocol}://${req.get('host')}/${file.path.replace(/\\/g, '/')}`;
-        uploadedDocs.push({
-          id: docId,
-          file_name: file.originalname,
-          file_url: fileUrl,
-          file_type: file.mimetype
-        });
+        uploadedDocs.push({ id: docId, file_name: file.originalname, file_url: fileUrl, file_type: file.mimetype });
       }
     }
-    // ---------------------------------------------
 
     const auction = await Auction.findById(auctionId);
-    res.status(201).json({
+
+    return res.status(201).json({
       success: true,
-      message: `Auction created with ${participantList.length} participant(s)${smsCount ? `, ${smsCount} SMS` : ''}}`,
-      auction: { ...auction, formatted_start_time: formatTimeToAMPM(auction.start_time), formatted_end_time: calculateEndTime(auction.start_time, auction.duration) },
+      message: `Auction created with ${participantList.length} participant(s)${smsCount ? `, ${smsCount} SMS` : ''}`,
+      auction: {
+        ...auction,
+        formatted_start_time: formatTimeToAMPM(auction.start_time),
+        formatted_end_time: calculateEndTime(auction.start_time, auction.duration)
+      },
       invitationResults: { totalParticipants: participantList.length, successfulSMS: smsCount },
       documents: uploadedDocs
     });
   } catch (e) {
     console.error('❌ Create auction:', e);
-    res.status(500).json({ success: false, message: 'Server error', error: e.message });
+    return res.status(500).json({ success: false, message: 'Server error', error: e.message });
   }
 };
 
