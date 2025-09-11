@@ -1,14 +1,14 @@
 const db = require('../db');
 const moment = require('moment'); // make sure to install: npm install moment
 
-// Reports & Analytics Overview
+
 exports.getOverview = async (req, res) => {
   try {
-    const { filter = 'this_month' } = req.query; // today, this_week, this_month, this_year
-
+    const { filter = 'this_month' } = req.query;
     let startDate, endDate;
     const now = moment();
 
+    /* ----------  existing date-window switch  ---------- */
     switch (filter) {
       case 'today':
         startDate = now.startOf('day').format('YYYY-MM-DD HH:mm:ss');
@@ -29,9 +29,9 @@ exports.getOverview = async (req, res) => {
         break;
     }
 
-    // Total Auctions and Completed Auctions
+    /* ----------  existing KPI queries  ---------- */
     const [auctionsData] = await db.query(
-      `SELECT 
+      `SELECT
           COUNT(*) AS total_auctions,
           SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed_auctions
        FROM auctions
@@ -39,7 +39,6 @@ exports.getOverview = async (req, res) => {
       [startDate, endDate]
     );
 
-    // Total Users and New Users
     const [usersData] = await db.query(
       `SELECT
           COUNT(*) AS total_users,
@@ -48,7 +47,6 @@ exports.getOverview = async (req, res) => {
       [startDate, endDate]
     );
 
-    // Total Revenue and Avg Bid
     const [revenueData] = await db.query(
       `SELECT
           SUM(b.amount) AS total_revenue,
@@ -59,10 +57,9 @@ exports.getOverview = async (req, res) => {
       [startDate, endDate]
     );
 
-    // Participation Rate (joined participants / total participants)
     const [participationData] = await db.query(
-      `SELECT 
-          ROUND(SUM(CASE WHEN ap.status='joined' THEN 1 ELSE 0 END) / 
+      `SELECT
+          ROUND(SUM(CASE WHEN ap.status='joined' THEN 1 ELSE 0 END) /
                 SUM(1) * 100, 2) AS participation_rate
        FROM auction_participants ap
        LEFT JOIN auctions a ON ap.auction_id = a.id
@@ -70,7 +67,6 @@ exports.getOverview = async (req, res) => {
       [startDate, endDate]
     );
 
-    // Top Auction Category (example: top title by number of bids)
     const [topData] = await db.query(
       `SELECT a.title AS top_auction
        FROM auctions a
@@ -82,6 +78,19 @@ exports.getOverview = async (req, res) => {
       [startDate, endDate]
     );
 
+    /* ----------  CORRECT monthly trends  ---------- */
+    const [trendRows] = await db.query(
+      `SELECT
+         DATE_FORMAT(a.created_at, '%b %Y')      AS month,
+         COUNT(DISTINCT a.id)                    AS auction_count,
+         COALESCE(ROUND(SUM(b.amount)), 0)       AS revenue
+       FROM auctions a
+       LEFT JOIN bids b ON b.auction_id = a.id
+       GROUP BY DATE_FORMAT(a.created_at, '%Y-%m')
+       ORDER BY DATE_FORMAT(a.created_at, '%Y-%m')`
+    );
+
+    /* ----------  final payload  ---------- */
     res.json({
       success: true,
       overview: {
@@ -92,17 +101,14 @@ exports.getOverview = async (req, res) => {
         total_revenue: revenueData[0].total_revenue || 0,
         avg_bid: revenueData[0].avg_bid || 0,
         participation_rate: participationData[0].participation_rate || 0,
-        top_auction: topData[0]?.top_auction || 'N/A'
+        top_auction: topData[0]?.top_auction || '—',
+        monthly_trends: trendRows
       }
     });
-    
+
   } catch (error) {
     console.error('❌ Overview error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
@@ -110,85 +116,96 @@ exports.getAuctionPerformanceReport = async (req, res) => {
   try {
     const { filter = 'this_month' } = req.query;
 
-    let startDate, endDate;
+    /* ----------  date window  ---------- */
     const now = moment();
+    const fmt = 'YYYY-MM-DD HH:mm:ss';
+    let startDate, endDate;
 
     switch (filter) {
       case 'today':
-        startDate = now.startOf('day').format('YYYY-MM-DD HH:mm:ss');
-        endDate = now.endOf('day').format('YYYY-MM-DD HH:mm:ss');
+        startDate = now.startOf('day').format(fmt);
+        endDate   = now.endOf('day').format(fmt);
         break;
       case 'this_week':
-        startDate = now.startOf('week').format('YYYY-MM-DD HH:mm:ss');
-        endDate = now.endOf('week').format('YYYY-MM-DD HH:mm:ss');
+        startDate = now.startOf('week').format(fmt);
+        endDate   = now.endOf('week').format(fmt);
         break;
       case 'this_year':
-        startDate = now.startOf('year').format('YYYY-MM-DD HH:mm:ss');
-        endDate = now.endOf('year').format('YYYY-MM-DD HH:mm:ss');
+        startDate = now.startOf('year').format(fmt);
+        endDate   = now.endOf('year').format(fmt);
         break;
       case 'this_month':
       default:
-        startDate = now.startOf('month').format('YYYY-MM-DD HH:mm:ss');
-        endDate = now.endOf('month').format('YYYY-MM-DD HH:mm:ss');
+        startDate = now.startOf('month').format(fmt);
+        endDate   = now.endOf('month').format(fmt);
         break;
     }
 
-    // Query auctions with details
-    const [auctions] = await db.query(
-      `SELECT 
-         a.id,
-         a.title,
-         a.auction_date,
-         a.base_price,
-         a.current_price,
-         a.status,
-         u.person_name AS auctioneer_name,
-         u.company_name AS auctioneer_company,
-         (SELECT COUNT(*) FROM auction_participants ap WHERE ap.auction_id = a.id) AS participants,
-         (SELECT COUNT(*) FROM bids b WHERE b.auction_id = a.id) AS total_bids,
-         (SELECT SUM(amount) * 0.05 FROM bids b WHERE b.auction_id = a.id) AS revenue
-       FROM auctions a
-       LEFT JOIN users u ON a.created_by = u.id
-       WHERE a.created_at BETWEEN ? AND ?
-       ORDER BY a.auction_date DESC`,
-      [startDate, endDate]
-    );
+    /* ----------  main query  ---------- */
+    const sql = `
+      SELECT
+        a.id,
+        a.title,
+        a.auction_date,
+        a.current_price,
+        a.status,
+        u.person_name AS auctioneer_name,
+        u.company_name AS auctioneer_company,
+        COALESCE(p.cnt, 0) AS participants,
+        COALESCE(b.cnt, 0) AS total_bids,
+        COALESCE(b.tot, 0) * 0.05 AS revenue
+      FROM auctions AS a
+      LEFT JOIN users AS u ON u.id = a.created_by
+      LEFT JOIN (
+          SELECT auction_id, COUNT(*) AS cnt
+          FROM auction_participants
+          GROUP BY auction_id
+      ) AS p ON p.auction_id = a.id
+      LEFT JOIN (
+          SELECT auction_id, COUNT(*) AS cnt, SUM(amount) AS tot
+          FROM bids
+          GROUP BY auction_id
+      ) AS b ON b.auction_id = a.id
+      WHERE a.created_at BETWEEN ? AND ?
+      ORDER BY a.auction_date DESC`;
 
-    // Format response
-    const report = auctions.map(a => ({
+    const [rows] = await db.query(sql, [startDate, endDate]);
+
+    /* ----------  shape rows for UI  ---------- */
+    const report = rows.map(r => ({
       auction_details: {
-        title: a.title,
-        date: moment(a.auction_date).format('YYYY-MM-DD'),
+        title: r.title,
+        date: moment(r.auction_date).format('YYYY-MM-DD')
       },
       auctioneer: {
-        name: a.auctioneer_name,
-        company: a.auctioneer_company
-      },
-      financial_data: {
-        base: a.base_price,
-        final: a.current_price || 'N/A',
-        revenue: a.revenue || 0
+        name: r.auctioneer_name,
+        company: r.auctioneer_company
       },
       participation: {
-        participants: a.participants,
-        total_bids: a.total_bids
+        participants: r.participants,
+        total_bids: r.total_bids
       },
-      status: a.status
+      financial_data: {
+        final: Number(r.current_price || 0),
+        revenue: Math.round(r.revenue || 0)
+      },
+      status: r.status
     }));
 
-    res.json({
-      success: true,
-      filter,
-      report
-    });
+    /* ----------  optional totals  ---------- */
+    const summary = {
+      total_auctions: rows.length,
+      total_revenue: Math.round(rows.reduce((s, r) => s + (r.revenue || 0), 0)),
+      avg_participants: rows.length
+        ? (rows.reduce((s, r) => s + r.participants, 0) / rows.length).toFixed(1)
+        : 0
+    };
+
+    res.json({ success: true, filter, summary, report });
 
   } catch (error) {
     console.error('❌ Auction performance report error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
@@ -196,120 +213,123 @@ exports.getAuctionPerformanceReport = async (req, res) => {
 exports.getUserActivityReport = async (req, res) => {
   try {
     const { period = 'this_month' } = req.query;
-
-    let startDate, endDate;
     const now = moment();
+    const fmt = 'YYYY-MM-DD HH:mm:ss';
+    let startDate, endDate;
 
     switch (period) {
       case 'today':
-        startDate = now.startOf('day').format('YYYY-MM-DD HH:mm:ss');
-        endDate = now.endOf('day').format('YYYY-MM-DD HH:mm:ss');
+        startDate = now.startOf('day').format(fmt);
+        endDate   = now.endOf('day').format(fmt);
         break;
       case 'this_week':
-        startDate = now.startOf('week').format('YYYY-MM-DD HH:mm:ss');
-        endDate = now.endOf('week').format('YYYY-MM-DD HH:mm:ss');
+        startDate = now.startOf('week').format(fmt);
+        endDate   = now.endOf('week').format(fmt);
         break;
       case 'this_year':
-        startDate = now.startOf('year').format('YYYY-MM-DD HH:mm:ss');
-        endDate = now.endOf('year').format('YYYY-MM-DD HH:mm:ss');
+        startDate = now.startOf('year').format(fmt);
+        endDate   = now.endOf('year').format(fmt);
         break;
       case 'this_month':
       default:
-        startDate = now.startOf('month').format('YYYY-MM-DD HH:mm:ss');
-        endDate = now.endOf('month').format('YYYY-MM-DD HH:mm:ss');
+        startDate = now.startOf('month').format(fmt);
+        endDate   = now.endOf('month').format(fmt);
         break;
     }
 
-    console.log('Querying period:', period, 'from', startDate, 'to', endDate);
-
-    // Get user activity data - FIXED query
-    const [users] = await db.query(
-      `SELECT 
-          u.id,
-          u.person_name as name,
-          u.company_name as company,
-          u.created_at as registration_date,
-          u.status,
-          -- Count auctions created by this user in the period
-          COUNT(DISTINCT CASE WHEN a.created_at BETWEEN ? AND ? THEN a.id END) as auctions_created,
-          -- Count bids placed by this user in the period
-          COUNT(DISTINCT CASE WHEN b.bid_time BETWEEN ? AND ? THEN b.id END) as bids_placed,
-          -- Count winning bids by this user in the period
-          SUM(CASE WHEN b.is_winning = 1 AND b.bid_time BETWEEN ? AND ? THEN 1 ELSE 0 END) as wins,
-          -- Sum of winning bid amounts in the period
-          SUM(CASE WHEN b.is_winning = 1 AND b.bid_time BETWEEN ? AND ? THEN b.amount ELSE 0 END) as total_revenue,
-          -- Average of winning bid amounts in the period
-          AVG(CASE WHEN b.is_winning = 1 AND b.bid_time BETWEEN ? AND ? THEN b.amount ELSE NULL END) as avg_win_amount,
-          -- Determine role based on activity
-          CASE 
-            WHEN COUNT(DISTINCT CASE WHEN a.created_at BETWEEN ? AND ? THEN a.id END) > 0 
-                 AND COUNT(DISTINCT CASE WHEN b.bid_time BETWEEN ? AND ? THEN b.id END) > 0 THEN 'Both'
-            WHEN COUNT(DISTINCT CASE WHEN a.created_at BETWEEN ? AND ? THEN a.id END) > 0 THEN 'Auctioneer'
-            WHEN COUNT(DISTINCT CASE WHEN b.bid_time BETWEEN ? AND ? THEN b.id END) > 0 THEN 'Participant'
-            ELSE 'Inactive'
-          END as user_role
+    /* ----------  one query – everything inside the period  ---------- */
+    const sql = `
+      SELECT
+        u.id,
+        u.person_name                                    AS name,
+        u.company_name                                   AS company,
+        u.created_at                                     AS registration_date,
+        /* ------ role ------ */
+        CASE
+          WHEN COUNT(DISTINCT CASE WHEN a.created_at BETWEEN ? AND ? THEN a.id END) > 0
+               AND COUNT(DISTINCT CASE WHEN b.bid_time BETWEEN ? AND ? THEN b.id END) > 0
+          THEN 'Both'
+          WHEN COUNT(DISTINCT CASE WHEN a.created_at BETWEEN ? AND ? THEN a.id END) > 0
+          THEN 'Auctioneer'
+          WHEN COUNT(DISTINCT CASE WHEN b.bid_time BETWEEN ? AND ? THEN b.id END) > 0
+          THEN 'Participant'
+          ELSE 'Inactive'
+        END                                              AS user_role,
+        /* ------ activity counts ------ */
+        COUNT(DISTINCT CASE WHEN a.created_at BETWEEN ? AND ? THEN a.id END) AS auctions_created,
+        COUNT(DISTINCT CASE WHEN b.bid_time   BETWEEN ? AND ? THEN b.id END) AS bids_placed,
+        SUM(CASE WHEN b.is_winning = 1 AND b.bid_time BETWEEN ? AND ? THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN b.is_winning = 1 AND b.bid_time BETWEEN ? AND ? THEN b.amount ELSE 0 END) AS total_revenue,
+        AVG(CASE WHEN b.is_winning = 1 AND b.bid_time BETWEEN ? AND ? THEN b.amount ELSE NULL END) AS avg_win_amount,
+        /* ------ auction status breakdown (only for auctions created in period) ------ */
+        SUM(CASE WHEN a.created_at BETWEEN ? AND ? AND a.status = 'live'      THEN 1 ELSE 0 END) AS live_count,
+        SUM(CASE WHEN a.created_at BETWEEN ? AND ? AND a.status = 'upcoming'  THEN 1 ELSE 0 END) AS upcoming_count,
+        SUM(CASE WHEN a.created_at BETWEEN ? AND ? AND a.status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
+        /* ------ dynamic user status ------ */
+        IF(
+          COUNT(DISTINCT CASE WHEN a.created_at BETWEEN ? AND ? THEN a.id END) +
+          COUNT(DISTINCT CASE WHEN b.bid_time   BETWEEN ? AND ? THEN b.id END) = 0,
+          'inactive',
+          'active'
+        )                                                AS user_status
       FROM users u
-      LEFT JOIN auctions a ON u.id = a.created_by
-      LEFT JOIN bids b ON u.id = b.user_id
+      LEFT JOIN auctions a ON a.created_by = u.id
+      LEFT JOIN bids b     ON b.user_id    = u.id
       GROUP BY u.id
-      ORDER BY u.person_name`,
-      [
-        // For auctions_created
-        startDate, endDate,
-        // For bids_placed
-        startDate, endDate,
-        // For wins
-        startDate, endDate,
-        // For total_revenue
-        startDate, endDate,
-        // For avg_win_amount
-        startDate, endDate,
-        // For role determination (auctions)
-        startDate, endDate,
-        // For role determination (bids)
-        startDate, endDate,
-        // For role determination (auctions again)
-        startDate, endDate,
-        // For role determination (bids again)
-        startDate, endDate
-      ]
-    );
+      ORDER BY u.person_name`;
 
-    console.log('Found users:', users.length);
+    const [users] = await db.query(sql, [
+      /* role + activity  */
+      startDate, endDate,  /* a */
+      startDate, endDate,  /* b */
+      startDate, endDate,  /* a */
+      startDate, endDate,  /* b */
+      /* auctions_created */
+      startDate, endDate,
+      /* bids_placed */
+      startDate, endDate,
+      /* wins */
+      startDate, endDate,
+      /* total_revenue */
+      startDate, endDate,
+      /* avg_win_amount */
+      startDate, endDate,
+      /* live / upcoming / completed */
+      startDate, endDate,
+      startDate, endDate,
+      startDate, endDate,
+      /* user_status */
+      startDate, endDate,
+      startDate, endDate
+    ]);
 
-    // Format the response to match your table structure
-    const userActivityReport = users.map(user => {
-      console.log('Processing user:', user.name, {
-        auctions: user.auctions_created,
-        bids: user.bids_placed,
-        wins: user.wins,
-        revenue: user.total_revenue,
-        avg: user.avg_win_amount
-      });
-
-      const financialData = user.total_revenue > 0 ? {
-        total: `₹${Math.round(user.total_revenue).toLocaleString('en-IN')}`,
-        average: `₹${user.avg_win_amount ? Math.round(user.avg_win_amount).toLocaleString('en-IN') : '0'}`
-      } : 'N/A';
-
-      return {
-        user_details: {
-          name: user.name,
-          company: user.company
-        },
-        role_registration: {
-          role: user.user_role,
-          registration_date: moment(user.registration_date).format('M/D/YYYY')
-        },
-        auction_activity: {
-          auctions: user.auctions_created,
-          bids: user.bids_placed,
-          wins: user.wins || 0  // Ensure wins is a number, not string
-        },
-        financial_data: financialData,
-        status: user.status
-      };
-    });
+    /* ----------  shape payload  ---------- */
+    const userActivityReport = users.map(u => ({
+      user_details: {
+        name: u.name,
+        company: u.company
+      },
+      role_registration: {
+        role: "User",
+        registration_date: moment(u.registration_date).format('M/D/YYYY')
+      },
+      auction_activity: {
+        auctions: u.auctions_created,
+        bids: u.bids_placed,
+        wins: u.wins || 0,
+        /* NEW: per-status counts inside the period */
+        live: u.live_count,
+        upcoming: u.upcoming_count,
+        completed: u.completed_count
+      },
+      financial_data: u.total_revenue > 0
+        ? {
+            total: `₹${Math.round(u.total_revenue).toLocaleString('en-IN')}`,
+            average: `₹${Math.round(u.avg_win_amount || 0).toLocaleString('en-IN')}`
+          }
+        : 'N/A',
+      status: u.user_status /* 'active' | 'inactive' */
+    }));
 
     res.json({
       success: true,
@@ -322,11 +342,7 @@ exports.getUserActivityReport = async (req, res) => {
 
   } catch (error) {
     console.error('❌ User activity report error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
