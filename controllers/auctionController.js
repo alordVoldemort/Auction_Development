@@ -424,36 +424,37 @@ exports.getAuctionDetails = async (req, res) => {
     // Safe time formatting functions
     const safeFormatTimeToAMPM = (timeValue) => {
   if (!timeValue) return '';
-  
+
   try {
-    let dateObj;
-    
+    let ist;
+
     if (typeof timeValue === 'string' && (timeValue.includes('T') || timeValue.includes(' '))) {
-      // Convert UTC datetime to IST
-      dateObj = toZonedTime(new Date(timeValue), 'Asia/Kolkata');
+      // full datetime string  ->  convert to IST
+      ist = toZonedTime(new Date(timeValue), 'Asia/Kolkata');
     } else if (typeof timeValue === 'string') {
-      // Handle time-only strings
-      const [hours, minutes, seconds] = timeValue.split(':');
-      dateObj = new Date();
-      dateObj.setHours(parseInt(hours, 10), parseInt(minutes, 10), parseInt(seconds || 0, 10));
+      // plain HH:MM(:SS)  ->  build today’s IST date
+      const [h, m] = timeValue.split(':');
+      ist = new Date();
+      ist.setHours(parseInt(h, 10), parseInt(m, 10), 0, 0);
     } else if (timeValue instanceof Date) {
-      dateObj = toZonedTime(timeValue, 'Asia/Kolkata');
+      // Date object  ->  shift to IST
+      ist = toZonedTime(timeValue, 'Asia/Kolkata');
     } else {
       return '';
     }
-    
-    const hours = dateObj.getHours();
-    const minutes = dateObj.getMinutes();
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    const formattedHour = hours % 12 || 12;
-    
-    return `${formattedHour}:${minutes.toString().padStart(2, '0')} ${ampm}`;
-  } catch (error) {
-    console.error('Error formatting time:', error);
+
+    const hours   = ist.getHours();
+    const minutes = ist.getMinutes().toString().padStart(2, '0');
+    const ampm    = hours >= 12 ? 'PM' : 'AM';
+    const fmtHour = hours % 12 || 12;
+
+    return `${fmtHour}:${minutes} ${ampm}`;
+  } catch (e) {
+    console.error('Error formatting time:', e);
     return '';
   }
 };
-
+    
     const safeCalculateEndTime = (startTime, duration) => {
       if (!startTime || !duration) return '';
       
