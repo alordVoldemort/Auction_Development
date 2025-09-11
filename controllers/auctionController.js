@@ -121,10 +121,6 @@ async function debugAuctionStatus(auctionId) {
     console.log(`Should live: ${calc[0].shouldLive} | Should completed: ${calc[0].shouldDone}`);
   } catch (e) { console.error('Debug error:', e); }
 }
-
-// ------------------------------------------------------------------
-// Status updater  (IST comparisons)
-// ------------------------------------------------------------------
 // ------------------------------------------------------------------
 // Status updater  (IST comparisons)
 // ------------------------------------------------------------------
@@ -137,24 +133,24 @@ async function updateAuctionStatuses() {
 
     conn = await db.getConnection(); await conn.beginTransaction();
 
-    /* 1. mark completed AND set end_time */
-    const [toCompleted] = await conn.query(`
-      UPDATE auctions
-      SET status = 'completed',
-          end_time = DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration MINUTE)
-      WHERE (status = 'live' OR status = 'upcoming')
-        AND DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration MINUTE) <= ?
-    `, [nowIST]);
+    /* 1. mark completed */
+const [toCompleted] = await conn.query(`
+  UPDATE auctions
+  SET status = 'completed',
+      end_time = DATE_FORMAT(CONVERT_TZ(CONCAT(auction_date,' ',start_time), '+00:00','+05:30') + INTERVAL duration MINUTE, '%H:%i:%s')
+  WHERE (status = 'live' OR status = 'upcoming')
+    AND CONVERT_TZ(CONCAT(auction_date,' ',start_time), '+00:00','+05:30') + INTERVAL duration MINUTE <= CONVERT_TZ(NOW(),'+00:00','+05:30')
+`, [nowIST]);
 
-    /* 2. upcoming -> live */
-    const [upcomingToLive] = await conn.query(`
-      UPDATE auctions
-      SET status = 'live',
-          end_time = DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration MINUTE)
-      WHERE status = 'upcoming'
-        AND CONCAT(auction_date,' ',start_time) <= ?
-        AND DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration MINUTE) > ?
-    `, [nowIST, nowIST]);
+/* 2. upcoming -> live */
+const [upcomingToLive] = await conn.query(`
+  UPDATE auctions
+  SET status = 'live',
+      end_time = DATE_FORMAT(CONVERT_TZ(CONCAT(auction_date,' ',start_time), '+00:00','+05:30') + INTERVAL duration MINUTE, '%H:%i:%s')
+  WHERE status = 'upcoming'
+    AND CONVERT_TZ(CONCAT(auction_date,' ',start_time), '+00:00','+05:30') <= CONVERT_TZ(NOW(),'+00:00','+05:30')
+    AND CONVERT_TZ(CONCAT(auction_date,' ',start_time), '+00:00','+05:30') + INTERVAL duration MINUTE > CONVERT_TZ(NOW(),'+00:00','+05:30')
+`, [nowIST, nowIST]);
 
     await conn.commit();
     console.log(`✅ Status update done → completed:${toCompleted.affectedRows}  live:${upcomingToLive.affectedRows}`);
