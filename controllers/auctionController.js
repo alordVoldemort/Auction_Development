@@ -221,10 +221,8 @@ exports.createAuction = async (req, res) => {
 
     const created_by = req.user.userId;
 
-    // 3. lock the chosen calendar day to Asia/Kolkata
-    const istDateStr = `${auction_date} ${start_time}`;
-    const istDate    = toZonedTime(istDateStr, TZ);
-    const finalAuctionDate = formatInTimeZone(istDate, TZ, 'yyyy-MM-dd');
+    // 3. use the date exactly as sent from frontend (already IST)
+    const finalAuctionDate = auction_date;
 
     // 4. create auction
     const auctionId = await Auction.create({
@@ -264,7 +262,7 @@ exports.createAuction = async (req, res) => {
         if (send_invitations === 'true' || send_invitations === true) {
           const auction = await Auction.findById(auctionId);
           const auctionDate = new Date(auction.auction_date).toLocaleDateString('en-IN');
-          const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register`;
+          const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register `;
 
           for (const p of participantList) {
             try { await sendTwilioSMS(p, msg); smsCount++; }
