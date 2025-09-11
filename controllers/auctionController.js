@@ -134,22 +134,22 @@ async function updateAuctionStatuses() {
 
     conn = await db.getConnection(); await conn.beginTransaction();
 
-    // 1. anything that should already be completed
+    /* 1.  mark completed */
     const [toCompleted] = await conn.query(`
       UPDATE auctions
       SET status = 'completed'
       WHERE (status = 'live' OR status = 'upcoming')
-        AND DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration SECOND) <= ?
+        AND DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration MINUTE) <= ?
     `, [nowIST]);
 
-    // 2. upcoming -> live
+    /* 2.  upcoming -> live */
     const [upcomingToLive] = await conn.query(`
       UPDATE auctions
       SET status = 'live',
-          end_time = DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration SECOND)
+          end_time = DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration MINUTE)
       WHERE status = 'upcoming'
         AND CONCAT(auction_date,' ',start_time) <= ?
-        AND DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration SECOND) > ?
+        AND DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration MINUTE) > ?
     `, [nowIST, nowIST]);
 
     await conn.commit();
