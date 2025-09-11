@@ -1,15 +1,20 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
-// Create connection pool with only valid settings
+// Create connection pool
 const db = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  connectionLimit: 3, // Most important setting to fix your issue
-  acquireTimeout: 10000, // 10 second timeout
-  idleTimeout: 60000, // 60 second idle timeout
+  connectionLimit: 3,
+  acquireTimeout: 10000,
+  idleTimeout: 60000,
+});
+
+// ➜  force every new connection to Asia/Kolkata
+db.on('connection', conn => {
+  conn.query(`SET time_zone = '+05:30';`);
 });
 
 // Test connection
@@ -22,7 +27,7 @@ db.getConnection()
     console.error('❌ Database connection error:', err.message);
   });
 
-// Add custom query function to ensure proper connection handling
+// safeQuery helper remains unchanged
 db.safeQuery = async (sql, params = []) => {
   let connection;
   try {
