@@ -125,6 +125,9 @@ async function debugAuctionStatus(auctionId) {
 // ------------------------------------------------------------------
 // Status updater  (IST comparisons)
 // ------------------------------------------------------------------
+// ------------------------------------------------------------------
+// Status updater  (IST comparisons)
+// ------------------------------------------------------------------
 async function updateAuctionStatuses() {
   let conn;
   try {
@@ -134,15 +137,16 @@ async function updateAuctionStatuses() {
 
     conn = await db.getConnection(); await conn.beginTransaction();
 
-    /* 1.  mark completed */
+    /* 1. mark completed AND set end_time */
     const [toCompleted] = await conn.query(`
       UPDATE auctions
-      SET status = 'completed'
+      SET status = 'completed',
+          end_time = DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration MINUTE)
       WHERE (status = 'live' OR status = 'upcoming')
         AND DATE_ADD(CONCAT(auction_date,' ',start_time), INTERVAL duration MINUTE) <= ?
     `, [nowIST]);
 
-    /* 2.  upcoming -> live */
+    /* 2. upcoming -> live */
     const [upcomingToLive] = await conn.query(`
       UPDATE auctions
       SET status = 'live',
@@ -371,11 +375,11 @@ exports.getAuctionDetails = async (req, res) => {
     const winner = await Bid.findWinningBid(id);
     const creator = await getUserById(auction.created_by);
 
-    // Calculate time information - FIXED: Handle datetime format for end_time
+    // Calculate time information
     const now = new Date();
     const auctionDateTime = new Date(`${auction.auction_date}T${auction.start_time}`);
     
-    // Safely handle end_time calculation - FIXED for datetime format
+    // Safely handle end_time calculation
     let endTime;
     if (auction.end_time) {
       // If end_time is a datetime string, extract just the time part
@@ -386,7 +390,7 @@ exports.getAuctionDetails = async (req, res) => {
         endTime = new Date(`${auction.auction_date}T${auction.end_time}`);
       }
     } else if (auction.start_time && auction.duration) {
-      endTime = new Date(auctionDateTime.getTime() + auction.duration * 1000);
+      endTime = new Date(auctionDateTime.getTime() + auction.duration * 60 * 1000);
     } else {
       endTime = null;
     }
@@ -421,49 +425,54 @@ exports.getAuctionDetails = async (req, res) => {
       }
     }
 
-    // Safe time formatting functions
+    // Safe time formatting functions - FIXED VERSION
     const safeFormatTimeToAMPM = (timeValue) => {
-  if (!timeValue) return '';
-
-  try {
-    let ist;
-
-    if (typeof timeValue === 'string' && (timeValue.includes('T') || timeValue.includes(' '))) {
-      // full datetime string  ->  convert to IST
-      ist = toZonedTime(new Date(timeValue), 'Asia/Kolkata');
-    } else if (typeof timeValue === 'string') {
-      // plain HH:MM(:SS)  ->  build today’s IST date
-      const [h, m] = timeValue.split(':');
-      ist = new Date();
-      ist.setHours(parseInt(h, 10), parseInt(m, 10), 0, 0);
-    } else if (timeValue instanceof Date) {
-      // Date object  ->  shift to IST
-      ist = toZonedTime(timeValue, 'Asia/Kolkata');
-    } else {
-      return '';
-    }
-
-    const hours   = ist.getHours();
-    const minutes = ist.getMinutes().toString().padStart(2, '0');
-    const ampm    = hours >= 12 ? 'PM' : 'AM';
-    const fmtHour = hours % 12 || 12;
-
-    return `${fmtHour}:${minutes} ${ampm}`;
-  } catch (e) {
-    console.error('Error formatting time:', e);
-    return '';
-  }
-};
+      if (!timeValue) return 'N/A';
+      
+      try {
+        let timeString;
+        
+        // Handle both time strings and datetime objects/strings
+        if (typeof timeValue === 'string') {
+          if (timeValue.includes('T') || timeValue.includes(' ')) {
+            // It's a datetime string - extract time part
+            const datetime = new Date(timeValue);
+            if (isNaN(datetime.getTime())) {
+              return 'N/A';
+            }
+            timeString = datetime.toTimeString().split(' ')[0]; // Gets "HH:MM:SS"
+          } else {
+            // It's already a time string (HH:MM:SS)
+            timeString = timeValue;
+          }
+        } else if (timeValue instanceof Date) {
+          // It's a Date object
+          timeString = timeValue.toTimeString().split(' ')[0];
+        } else {
+          return 'N/A';
+        }
+        
+        const [hours, minutes] = timeString.split(':');
+        let hour = parseInt(hours);
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+        hour = hour % 12;
+        hour = hour ? hour : 12; // the hour '0' should be '12'
+        return `${hour}:${minutes} ${ampm}`;
+      } catch (error) {
+        console.error('Error formatting time:', error);
+        return 'N/A';
+      }
+    };
     
     const safeCalculateEndTime = (startTime, duration) => {
-      if (!startTime || !duration) return '';
+      if (!startTime || !duration) return 'N/A';
       
       try {
         const [hours, minutes] = startTime.split(':');
         const startDate = new Date();
         startDate.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0);
         
-        const endDate = new Date(startDate.getTime() + duration * 1000);
+        const endDate = new Date(startDate.getTime() + duration * 60 * 1000); // duration in minutes
         const endHours = endDate.getHours();
         const endMinutes = endDate.getMinutes();
         const ampm = endHours >= 12 ? 'PM' : 'AM';
@@ -472,7 +481,7 @@ exports.getAuctionDetails = async (req, res) => {
         return `${formattedHour}:${endMinutes.toString().padStart(2, '0')} ${ampm}`;
       } catch (error) {
         console.error('Error calculating end time:', error);
-        return '';
+        return 'N/A';
       }
     };
 
@@ -481,7 +490,9 @@ exports.getAuctionDetails = async (req, res) => {
       ...auction,
       auction_no: `AUC${auction.id.toString().padStart(3, '0')}`,
       formatted_start_time: safeFormatTimeToAMPM(auction.start_time),
-      formatted_end_time: auction.end_time ? safeFormatTimeToAMPM(auction.end_time) : safeCalculateEndTime(auction.start_time, auction.duration),
+      formatted_end_time: auction.end_time ? 
+        safeFormatTimeToAMPM(auction.end_time) : 
+        safeCalculateEndTime(auction.start_time, auction.duration),
       time_remaining: timeRemaining,
       is_creator: isCreator,
       has_joined: isParticipant,
