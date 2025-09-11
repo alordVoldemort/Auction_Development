@@ -17,9 +17,7 @@ class Auction {
       created_by
     } = auctionData;
 
-    // ensure we store the **IST** calendar day exactly
-    const istMidnight = toISTDate(auction_date, start_time);
-    const istYMD = istDateString(istMidnight);
+    const istYMD = auction_date; // already IST from frontend
 
     const [result] = await db.query(
       `INSERT INTO auctions 
