@@ -297,42 +297,6 @@ const finalAuctionDate = formatInTimeZone(istDate, TZ, 'yyyy-MM-dd'); // stays 2
     res.status(500).json({ success: false, message: 'Server error', error: e.message });
   }
 };
-    // -------------  DOCUMENT HANDLING  -------------
-    let uploadedDocs = [];
-    if (req.files?.length) {
-      for (const file of req.files) {
-        const docId = await AuctionDocument.add({
-          auction_id: auctionId,
-          file_name: file.originalname,
-          file_path: file.path,
-          file_type: file.mimetype,
-          file_size: file.size
-        });
-        // build clickable preview URL
-        const fileUrl = `${req.protocol}://${req.get('host')}/${file.path.replace(/\\/g, '/')}`;
-        uploadedDocs.push({
-          id: docId,
-          file_name: file.originalname,
-          file_url: fileUrl,
-          file_type: file.mimetype
-        });
-      }
-    }
-    // ---------------------------------------------
-
-    const auction = await Auction.findById(auctionId);
-    res.status(201).json({
-      success: true,
-      message: `Auction created with ${participantList.length} participant(s)${smsCount ? `, ${smsCount} SMS` : ''}}`,
-      auction: { ...auction, formatted_start_time: formatTimeToAMPM(auction.start_time), formatted_end_time: calculateEndTime(auction.start_time, auction.duration) },
-      invitationResults: { totalParticipants: participantList.length, successfulSMS: smsCount },
-      documents: uploadedDocs
-    });
-  } catch (e) {
-    console.error('❌ Create auction:', e);
-    res.status(500).json({ success: false, message: 'Server error', error: e.message });
-  }
-};
 
 exports.getUserAuctions = async (req, res) => {
   try {
