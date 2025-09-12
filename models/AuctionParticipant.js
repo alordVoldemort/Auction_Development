@@ -36,17 +36,20 @@ class AuctionParticipant {
     return result.affectedRows;
   }
 
-  static async findByAuction(auctionId) {
-    const [participants] = await db.query(
-      `SELECT ap.*, u.company_name, u.person_name 
-       FROM auction_participants ap 
-       LEFT JOIN users u ON ap.user_id = u.id 
-       WHERE ap.auction_id = ? 
-       ORDER BY ap.invited_at DESC`,
-      [auctionId]
-    );
-    return participants;
-  }
+ static async findByAuction(auctionId) {
+  const [participants] = await db.query(
+    `SELECT ap.*,
+            u.id          AS user_id,
+            u.person_name,
+            u.company_name
+     FROM auction_participants ap
+     LEFT JOIN users u ON u.phone_number = ap.phone_number   -- <-- key change
+     WHERE ap.auction_id = ?
+     ORDER BY ap.invited_at DESC`,
+    [auctionId]
+  );
+  return participants;
+}
 
   static async isParticipant(auctionId, phoneNumber) {
     const [participants] = await db.query(
