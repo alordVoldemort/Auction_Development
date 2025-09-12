@@ -243,11 +243,18 @@ exports.createAuction = async (req, res) => {
     const failures = [];
 
     if (participants) {
-      participantList = [
-        ...new Set(
-          Array.isArray(participants) ? participants : [participants]
-        )
-      ].filter(Boolean);
+  let parsed;
+  try {
+    // Try JSON first (e.g. '["+9198...", "+9176..."]')
+    parsed = JSON.parse(participants);
+  } catch {
+    // Fallback: split comma-separated string
+    parsed = participants.split(',');
+  }
+
+  participantList = [...new Set(
+    Array.isArray(parsed) ? parsed.map(p => p.toString().trim()) : [parsed]
+  )].filter(Boolean);
 
       if (participantList.length) {
         await AuctionParticipant.addMultiple(
