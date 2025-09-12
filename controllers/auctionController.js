@@ -977,35 +977,129 @@ exports.addParticipants = async (req, res) => {
 exports.getParticipants = async (req, res) => {
   try {
     const { auction_id } = req.params;
+    if (!auction_id) return res.status(400).json({ success: false, message: 'Auction ID required' });
 
-    // basic validation
+    /* ---------- basic validation ---------- */
     const auction = await Auction.findById(auction_id);
-    if (!auction)
-      return res.status(404).json({ success: false, message: 'Auction not found' });
+    if (!auction) return res.status(404).json({ success: false, message: 'Auction not found' });
 
-    /* ---------- auctioneer (creator) ---------- */
-    const auctioneer = await getUserById(auction.created_by); // {id, company_name, person_name, phone_number}
-    const auctioneerData = {
-      id: 0,
-      auction_id: Number(auction_id),
-      user_id: auction.created_by,
-      phone_number: auctioneer?.phone_number || '',
-      status: 'auctioneer',
-      invited_at: null,
-      joined_at: null,
-      company_name: auctioneer?.company_name || null,
-      person_name: auctioneer?.person_name || null
-    };
+    /* ---------- parallel data fetch ---------- */
+    const [participants, bids, documents, winner, creator] = await Promise.all([
+      AuctionParticipant.findByAuction(auction_id),
+      Bid.findByAuction(auction_id),
+      AuctionDocument.findByAuction(auction_id),
+      Bid.findWinningBid(auction_id),
+      getUserById(auction.created_by)
+    ]);
 
-    /* ---------- invited / joined users ---------- */
-    const participants = await AuctionParticipant.findByAuction(auction_id);
+    /* ---------- time helpers (re-used from getAuctionDetails) ---------- */
+    const now = new Date();
+    const auctionDateTime = new Date(`${auction.auction_date}T${auction.start_time}`);
+
+    let endTime;
+    if (auction.end_time) {
+      if (typeof auction.end_time === 'string' && auction.end_time.includes(' ')) {
+        const [, timePart] = auction.end_time.split(' ');
+        endTime = new Date(`${auction.auction_date}T${timePart}`);
+      } else {
+        endTime = new Date(`${auction.auction_date}T${auction.end_time}`);
+      }
+    } else if (auction.start_time && auction.duration) {
+      endTime = new Date(auctionDateTime.getTime() + auction.duration * 1000); // seconds in DB
+    } else endTime = null;
+
+    let timeStatus = auction.status;
+    let timeValue = '';
+    let timeRemaining = 0;
+
+    if (auction.status === 'live' && endTime) {
+      timeRemaining = endTime - now;
+      if (timeRemaining > 0) {
+        const h = Math.floor((timeRemaining % 864e5) / 36e5);
+        const m = Math.floor((timeRemaining % 36e5) / 6e4);
+        const s = Math.floor((timeRemaining % 6e4) / 1e3);
+        timeStatus = 'Live';
+        timeValue = `${h.toString().padStart(2, '0')}h ${m.toString().padStart(2, '0')}m ${s.toString().padStart(2, '0')}s`;
+      } else timeStatus = 'Ended';
+    } else if (auction.status === 'upcoming') {
+      timeRemaining = auctionDateTime - now;
+      if (timeRemaining > 0) {
+        const d = Math.floor(timeRemaining / 864e5);
+        const h = Math.floor((timeRemaining % 864e5) / 36e5);
+        const m = Math.floor((timeRemaining % 36e5) / 6e4);
+        timeStatus = 'Starts in';
+        timeValue = `${d}d ${h}h ${m}m`;
+      } else timeStatus = 'Starting soon';
+    }
+
+    /* ---------- ranking (lowest amount first) ---------- */
+    const ranking = [...bids]
+      .sort((a, b) => parseFloat(a.amount) - parseFloat(b.amount))
+      .map((b, idx) => ({
+        rank: idx + 1,
+        user_id: b.user_id,
+        person_name: b.person_name,
+        company_name: b.company_name,
+        amount: b.amount,
+        bid_time: b.bid_time,
+        is_winning: b.is_winning
+      }));
 
     /* ---------- response ---------- */
     res.json({
       success: true,
-      auctioneer: auctioneerData,
-      participants,
-      count: participants.length          // ONLY invited/joined people
+      auction: {
+        ...auction,
+        auction_no: `AUC${auction.id.toString().padStart(3, '0')}`,
+        formatted_start_time: formatTimeToAMPM(auction.start_time),
+        formatted_end_time: auction.end_time
+          ? formatTimeToAMPM(auction.end_time)
+          : calculateEndTime(auction.start_time, auction.duration),
+        time_remaining: timeRemaining,
+        time_status: timeStatus,
+        time_value: timeValue
+      },
+      auctioneer: creator ? {
+        id: 0,
+        auction_id: Number(auction_id),
+        user_id: auction.created_by,
+        phone_number: creator.phone_number || '',
+        status: 'auctioneer',
+        invited_at: null,
+        joined_at: null,
+        company_name: creator.company_name || null,
+        person_name: creator.person_name || null
+      } : null,
+      participants: participants.map(p => ({
+        id: p.id,
+        user_id: p.user_id,
+        phone_number: p.phone_number,
+        status: p.status,
+        invited_at: p.invited_at,
+        joined_at: p.joined_at,
+        person_name: p.person_name,
+        company_name: p.company_name
+      })),
+      bids,
+      bid_ranking: ranking,
+      documents: documents.map(d => ({
+        id: d.id,
+        file_name: d.file_name,
+        file_url: `${req.protocol}://${req.get('host')}/${d.file_path.replace(/\\/g, '/')}`,
+        file_type: d.file_type,
+        uploaded_at: d.uploaded_at
+      })),
+      statistics: {
+        total_participants: participants.length,
+        total_bids: bids.length,
+        active_participants: participants.filter(p => p.status === 'joined').length,
+        highest_bid: bids.length
+          ? Math.min(...bids.map(b => parseFloat(b.amount || 0)))
+          : parseFloat(auction.current_price || 0),
+        lowest_bid: bids.length
+          ? Math.max(...bids.map(b => parseFloat(b.amount || 0)))
+          : parseFloat(auction.current_price || 0)
+      }
     });
 
   } catch (error) {
