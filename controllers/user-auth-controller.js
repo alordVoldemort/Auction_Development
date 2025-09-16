@@ -12,10 +12,6 @@ exports.signup = async (req, res) => {
       return res.status(400).json({ success: false, message: "Company name is required (min 2 characters)" });
     }
 
-    if (!phone_number || !/^\d{10}$/.test(phone_number)) {
-      return res.status(400).json({ success: false, message: "Valid 10-digit phone number is required" });
-    }
-
     if (person_name && !/^[a-zA-Z\s]+$/.test(person_name)) {
       return res.status(400).json({ success: false, message: "Person name should only contain letters" });
     }
