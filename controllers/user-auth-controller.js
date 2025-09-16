@@ -7,15 +7,38 @@ exports.signup = async (req, res) => {
   try {
     const { company_name, phone_number, person_name, email, company_address, company_product_service } = req.body;
 
-    if (!company_name || !phone_number) {
-      return res.status(400).json({ success: false, message: "Company name and phone number are required" });
+    // Validation rules
+    if (!company_name || company_name.trim().length < 2) {
+      return res.status(400).json({ success: false, message: "Company name is required (min 2 characters)" });
     }
 
+    if (!phone_number || !/^\d{10}$/.test(phone_number)) {
+      return res.status(400).json({ success: false, message: "Valid 10-digit phone number is required" });
+    }
+
+    if (person_name && !/^[a-zA-Z\s]+$/.test(person_name)) {
+      return res.status(400).json({ success: false, message: "Person name should only contain letters" });
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ success: false, message: "Invalid email format" });
+    }
+
+    if (!company_product_service || company_product_service.trim().length < 2) {
+      return res.status(400).json({ success: false, message: "Company product/service is required" });
+    }
+
+    if (company_address && company_address.length > 255) {
+      return res.status(400).json({ success: false, message: "Company address must be less than 255 characters" });
+    }
+
+    // Check if phone already exists
     const [existingUser] = await db.query('SELECT * FROM users WHERE phone_number = ?', [phone_number]);
     if (existingUser.length > 0) {
       return res.status(400).json({ success: false, message: "User already exists with this phone number" });
     }
 
+    // Insert into DB
     const [result] = await db.query(
       'INSERT INTO users (company_name, phone_number, person_name, email, company_address, company_product_service) VALUES (?, ?, ?, ?, ?, ?)',
       [company_name, phone_number, person_name, email, company_address, company_product_service]
@@ -46,6 +69,7 @@ exports.signup = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error", error: error.message });
   }
 };
+
 
 exports.sendLoginOTP = async (req, res) => {
   try {
