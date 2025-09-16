@@ -5,7 +5,7 @@ require('dotenv').config();
 
 exports.signup = async (req, res) => {
   try {
-    const { company_name, phone_number, person_name, email, company_address } = req.body;
+    const { company_name, phone_number, person_name, email, company_address, company_product_service } = req.body;
 
     if (!company_name || !phone_number) {
       return res.status(400).json({ success: false, message: "Company name and phone number are required" });
@@ -17,8 +17,8 @@ exports.signup = async (req, res) => {
     }
 
     const [result] = await db.query(
-      'INSERT INTO users (company_name, phone_number, person_name, email, company_address) VALUES (?, ?, ?, ?, ?)',
-      [company_name, phone_number, person_name, email, company_address]
+      'INSERT INTO users (company_name, phone_number, person_name, email, company_address, company_product_service) VALUES (?, ?, ?, ?, ?, ?)',
+      [company_name, phone_number, person_name, email, company_address, company_product_service]
     );
 
     const userId = result.insertId;
@@ -37,7 +37,8 @@ exports.signup = async (req, res) => {
         phone_number,
         person_name,
         email,
-        company_address
+        company_address,
+        company_product_service
       }
     });
   } catch (error) {
@@ -135,7 +136,7 @@ exports.getProfile = async (req, res) => {
     const userId = req.user.userId;
     
     const [user] = await db.query(
-      'SELECT id, company_name, phone_number, person_name, email, company_address FROM users WHERE id = ?', 
+      'SELECT id, company_name, phone_number, person_name, email, company_address, company_product_service FROM users WHERE id = ?', 
       [userId]
     );
     
@@ -153,11 +154,10 @@ exports.getProfile = async (req, res) => {
 // Edit Profile by ID - User can only edit their own profile
 exports.editProfileByID = async (req, res) => {
   try {
-    const userId = req.user.userId; // Authenticated user's ID
-    const { user_id } = req.params; // User ID from URL parameters
-    const { company_name, person_name, email, company_address } = req.body;
+    const userId = req.user.userId;
+    const { user_id } = req.params;
+    const { company_name, person_name, email, company_address, company_product_service } = req.body;
 
-    // Validate that user is editing their own profile
     if (parseInt(user_id) !== parseInt(userId)) {
       return res.status(403).json({ 
         success: false, 
@@ -165,7 +165,6 @@ exports.editProfileByID = async (req, res) => {
       });
     }
 
-    // Validate required fields
     if (!company_name || !person_name) {
       return res.status(400).json({ 
         success: false, 
@@ -173,27 +172,24 @@ exports.editProfileByID = async (req, res) => {
       });
     }
 
-    // Check if user exists
     const [userCheck] = await db.query('SELECT id FROM users WHERE id = ?', [user_id]);
     if (userCheck.length === 0) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Update user profile
     const [result] = await db.query(
       `UPDATE users 
-       SET company_name = ?, person_name = ?, email = ?, company_address = ?, updated_at = NOW()
+       SET company_name = ?, person_name = ?, email = ?, company_address = ?, company_product_service = ?, updated_at = NOW()
        WHERE id = ?`,
-      [company_name, person_name, email, company_address, user_id]
+      [company_name, person_name, email, company_address, company_product_service, user_id]
     );
 
     if (result.affectedRows === 0) {
       return res.status(400).json({ success: false, message: "Failed to update profile" });
     }
 
-    // Fetch updated user data
     const [updatedUser] = await db.query(
-      'SELECT id, company_name, phone_number, person_name, email, company_address FROM users WHERE id = ?',
+      'SELECT id, company_name, phone_number, person_name, email, company_address, company_product_service FROM users WHERE id = ?',
       [user_id]
     );
 
