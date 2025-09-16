@@ -116,7 +116,8 @@ exports.createAuction = async (req, res) => {
   try {
     const {
       title, description, auction_date, start_time, duration, currency,
-      decremental_value, pre_bid_allowed = true, participants, send_invitations = true
+      decremental_value, pre_bid_allowed = true, participants, send_invitations = true,
+      open_to_all = false
     } = req.body;
 
     if (!title || !auction_date || !start_time || !duration || !decremental_value)
@@ -136,6 +137,7 @@ exports.createAuction = async (req, res) => {
       decremental_value: parseFloat(decremental_value),
       current_price: parseFloat(decremental_value),
       pre_bid_allowed: pre_bid_allowed === 'true' || pre_bid_allowed === true,
+      open_to_all: open_to_all === 'true' || open_to_all === false,
       created_by
     });
 
@@ -143,19 +145,17 @@ exports.createAuction = async (req, res) => {
 
     let participantList = [], smsCount = 0;
 
-    if (participants) {
+    if (!open_to_all && participants) {
       let parsed = participants;
 
-      // 🔹 If participants is string → try to parse JSON
       if (typeof participants === "string") {
         try {
-          parsed = JSON.parse(participants); // if valid JSON
+          parsed = JSON.parse(participants);
         } catch {
-          parsed = participants.split(",");  // fallback: comma separated
+          parsed = participants.split(",");
         }
       }
 
-      // 🔹 Ensure array of trimmed numbers
       participantList = [...new Set(
         (Array.isArray(parsed) ? parsed : [parsed])
           .map(p => String(p).replace(/[\[\]"]/g, "").trim())
@@ -173,11 +173,10 @@ exports.createAuction = async (req, res) => {
           }))
         );
 
-        // 🔹 Send SMS if enabled
         if (send_invitations === 'true' || send_invitations === true) {
           const auction = await Auction.findById(auctionId);
           const auctionDate = new Date(auction.auction_date).toLocaleDateString('en-IN');
-          const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register `;
+          const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register  `;
 
           for (const p of participantList) {
             try {
@@ -192,7 +191,6 @@ exports.createAuction = async (req, res) => {
       }
     }
 
-    // 🔹 Handle documents upload
     let uploadedDocs = [];
     if (req.files?.length) {
       for (const file of req.files) {
@@ -217,14 +215,18 @@ exports.createAuction = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: `Auction created with ${participantList.length} participant(s)${smsCount ? `, ${smsCount} SMS` : ''}`,
+      message: open_to_all
+        ? 'Auction created – open to all suppliers'
+        : `Auction created with ${participantList.length} participant(s)${smsCount ? `, ${smsCount} SMS` : ''}`,
       auction: {
         ...auction,
         end_time,
         formatted_start_time: formatTimeToAMPM(auction.start_time),
         formatted_end_time: formatTimeToAMPM(end_time)
       },
-      invitationResults: { totalParticipants: participantList.length, successfulSMS: smsCount },
+      invitationResults: open_to_all
+        ? { totalParticipants: 0, successfulSMS: 0, note: 'Open to all suppliers' }
+        : { totalParticipants: participantList.length, successfulSMS: smsCount },
       documents: uploadedDocs
     });
   } catch (e) {
@@ -232,8 +234,6 @@ exports.createAuction = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Server error', error: e.message });
   }
 };
-
-
 
 // PATCH API - Update decremental_value in DB
 exports.updateDecrementalValue = async (req, res) => {
