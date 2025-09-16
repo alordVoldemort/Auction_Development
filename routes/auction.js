@@ -16,12 +16,9 @@ router.post('/:id/close', auctionController.closeAuction);
 router.post('/participants/add', auctionController.addParticipants);
 router.get('/:auction_id/participants', auctionController.getParticipants);
 router.post('/join', auctionController.joinAuction);
-
-// 
-
+router.patch("/:id/decremental", auctionController.updateDecrementalValue);
 
 
-// Add these new routes for My Auctions UI
 // router.get('/dashboard/stats', auctionController.getUserDashboard);
 router.get('/list/filtered', auctionController.getFilteredAuctions);
 router.post('/:id/start', auctionController.startAuction);
@@ -30,5 +27,12 @@ router.put('/:id/extend', auctionController.extendAuctionTime);
 
 router.post('/:id/join-auctioneer', auctionController.joinAsAuctioneer);
 router.get('/:id/report', auctionController.downloadReport);
+
+// Pre-bid management routes
+router.post('/pre-bid', auctionController.submitPreBid); // NEW: Submit pre-bid endpoint
+router.get('/:id/my-prebid', auctionController.getMyPreBid); // NEW: Get user's pre-bid for auction
+router.get('/:id/prebids', auctionController.getPreBids);
+router.post('/prebid/:id/approve', auctionController.approvePreBid);
+router.post('/prebid/:id/reject', auctionController.rejectPreBid);
 
 module.exports = router;
