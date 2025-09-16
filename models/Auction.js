@@ -1,5 +1,17 @@
+
 const db = require('../db');
-const { toISTDate, istDateString, normaliseRow } = require('../utils/ist');
+const { toISTDate, istDateString, normaliseRow: baseNormaliseRow } = require('../utils/ist');
+
+// Extend normaliseRow to include open_to_all + pre_bid_allowed as booleans
+function normaliseRow(row) {
+  if (!row) return null;
+  const norm = baseNormaliseRow(row);
+  return {
+    ...norm,
+    pre_bid_allowed: !!row.pre_bid_allowed,
+    open_to_all: !!row.open_to_all
+  };
+}
 
 class Auction {
   /* ----------------------  CREATE  -------------------------- */
@@ -14,6 +26,7 @@ class Auction {
       decremental_value,
       current_price,
       pre_bid_allowed,
+      open_to_all,           // ✅ added
       created_by
     } = auctionData;
 
@@ -22,8 +35,8 @@ class Auction {
     const [result] = await db.query(
       `INSERT INTO auctions 
        (title, description, auction_date, start_time, duration, currency, 
-        decremental_value, current_price, pre_bid_allowed, created_by, status) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'upcoming')`,
+        decremental_value, current_price, pre_bid_allowed, open_to_all, created_by, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'upcoming')`,
       [
         title,
         description,
@@ -33,7 +46,8 @@ class Auction {
         currency,
         decremental_value,
         current_price,
-        pre_bid_allowed,
+        pre_bid_allowed ? 1 : 0,
+        open_to_all ? 1 : 0,
         created_by
       ]
     );
