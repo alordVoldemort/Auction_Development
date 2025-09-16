@@ -4,8 +4,9 @@ exports.getDashboard = async (req, res) => {
   try {
     const userId = req.user.userId;
     
-    // Get all dashboard data in parallel
-    const [stats, upcomingAuctions, recentActivities] = await Promise.all([
+    // Get user data and all dashboard data in parallel
+    const [userData, stats, upcomingAuctions, recentActivities] = await Promise.all([
+      getUserData(userId),
       getDashboardStats(userId),
       getUpcomingAuctions(userId),
       getRecentActivity(userId)
@@ -14,7 +15,7 @@ exports.getDashboard = async (req, res) => {
     res.json({
       success: true,
       dashboard: {
-        welcome_message: "Welcome back! 👋 Here's what's happening with your auctions today.",
+        welcome_message: `Welcome back, ${userData.person_name || 'User'}! 👋 Here's what's happening with your auctions today.`,
         stats: stats,
         upcoming_auctions: upcomingAuctions,
         recent_activities: recentActivities
@@ -30,6 +31,12 @@ exports.getDashboard = async (req, res) => {
     });
   }
 };
+
+// Helper function to get user data
+async function getUserData(userId) {
+  const [user] = await db.query('SELECT person_name FROM users WHERE id = ?', [userId]);
+  return user.length > 0 ? user[0] : { person_name: 'User' };
+}
 
 // Helper function to get dashboard statistics - FIXED LIVE AUCTIONS QUERY
 async function getDashboardStats(userId) {
@@ -75,6 +82,9 @@ async function getDashboardStats(userId) {
     avg_response_time: `${avgBidResult[0][0].avg_response}s`
   };
 }
+
+// The rest of your helper functions remain the same...
+// getUpcomingAuctions, getRecentActivity, formatDuration, formatStatus, etc.
 
 // Helper function to get upcoming/live auctions - DYNAMIC DATA
 async function getUpcomingAuctions(userId) {
