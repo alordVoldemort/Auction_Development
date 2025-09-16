@@ -142,35 +142,79 @@ exports.createAuction = async (req, res) => {
     await updateAuctionStatuses();
 
     let participantList = [], smsCount = 0;
+
     if (participants) {
-      participantList = [...new Set(Array.isArray(participants) ? participants : [participants])].filter(Boolean);
+      let parsed = participants;
+
+      // 🔹 If participants is string → try to parse JSON
+      if (typeof participants === "string") {
+        try {
+          parsed = JSON.parse(participants); // if valid JSON
+        } catch {
+          parsed = participants.split(",");  // fallback: comma separated
+        }
+      }
+
+      // 🔹 Ensure array of trimmed numbers
+      participantList = [...new Set(
+        (Array.isArray(parsed) ? parsed : [parsed])
+          .map(p => String(p).replace(/[\[\]"]/g, "").trim())
+          .filter(Boolean)
+      )];
+
       if (participantList.length) {
-        await AuctionParticipant.addMultiple(auctionId, participantList.map(p => ({ user_id: null, phone_number: p })));
+        await AuctionParticipant.addMultiple(
+          auctionId,
+          participantList.map(p => ({
+            user_id: null,
+            phone_number: p,
+            status: "invited",
+            invited_at: new Date()
+          }))
+        );
+
+        // 🔹 Send SMS if enabled
         if (send_invitations === 'true' || send_invitations === true) {
           const auction = await Auction.findById(auctionId);
           const auctionDate = new Date(auction.auction_date).toLocaleDateString('en-IN');
           const msg = `Join "${auction.title}" auction on ${auctionDate} at ${auction.start_time}. Website: https://soft-macaron-8cac07.netlify.app/register `;
+
           for (const p of participantList) {
-            try { await sendTwilioSMS(p, msg); smsCount++; } catch (e) { /* ignore */ }
+            try {
+              await sendTwilioSMS(p, msg);
+              smsCount++;
+            } catch (e) {
+              console.error(`❌ Failed to send SMS to ${p}:`, e.message);
+            }
             await new Promise(r => setTimeout(r, 500));
           }
         }
       }
     }
 
+    // 🔹 Handle documents upload
     let uploadedDocs = [];
     if (req.files?.length) {
       for (const file of req.files) {
         const docId = await AuctionDocument.add({
-          auction_id: auctionId, file_name: file.originalname,
-          file_path: file.path, file_type: file.mimetype, file_size: file.size
+          auction_id: auctionId,
+          file_name: file.originalname,
+          file_path: file.path,
+          file_type: file.mimetype,
+          file_size: file.size
         });
         const fileUrl = `${req.protocol}://${req.get('host')}/${file.path.replace(/\\/g, '/')}`;
-        uploadedDocs.push({ id: docId, file_name: file.originalname, file_url: fileUrl, file_type: file.mimetype });
+        uploadedDocs.push({
+          id: docId,
+          file_name: file.originalname,
+          file_url: fileUrl,
+          file_type: file.mimetype
+        });
       }
     }
 
     const auction = await Auction.findById(auctionId);
+
     return res.status(201).json({
       success: true,
       message: `Auction created with ${participantList.length} participant(s)${smsCount ? `, ${smsCount} SMS` : ''}`,
@@ -188,6 +232,8 @@ exports.createAuction = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Server error', error: e.message });
   }
 };
+
+
 
 // PATCH API - Update decremental_value in DB
 exports.updateDecrementalValue = async (req, res) => {
