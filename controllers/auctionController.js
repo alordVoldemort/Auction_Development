@@ -137,7 +137,7 @@ exports.createAuction = async (req, res) => {
       decremental_value: parseFloat(decremental_value),
       current_price: parseFloat(decremental_value),
       pre_bid_allowed: pre_bid_allowed === 'true' || pre_bid_allowed === true,
-      open_to_all: open_to_all === 'true' || open_to_all === false,
+      open_to_all: open_to_all === 'true' || open_to_all === true,
       created_by
     });
 
