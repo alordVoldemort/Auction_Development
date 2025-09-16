@@ -87,6 +87,7 @@ async function getDashboardStats(userId) {
 // getUpcomingAuctions, getRecentActivity, formatDuration, formatStatus, etc.
 
 // Helper function to get upcoming/live auctions - DYNAMIC DATA
+// Helper function to get upcoming/live auctions - COUNT ALL PARTICIPANTS
 async function getUpcomingAuctions(userId) {
   const [auctions] = await db.query(`
     SELECT 
@@ -98,12 +99,11 @@ async function getUpcomingAuctions(userId) {
       a.duration,
       a.current_price,
       a.currency,
-      COUNT(DISTINCT ap.id) as participant_count,
+      (SELECT COUNT(*) FROM auction_participants WHERE auction_id = a.id) as participant_count,
       COUNT(DISTINCT b.id) as bid_count,
       CONCAT('AUC', LPAD(a.id, 3, '0')) as auction_no,
       u.company_name as creator_company
     FROM auctions a
-    LEFT JOIN auction_participants ap ON a.id = ap.auction_id
     LEFT JOIN bids b ON a.id = b.auction_id
     LEFT JOIN users u ON a.created_by = u.id
     WHERE a.status IN ('live', 'upcoming')
