@@ -464,6 +464,7 @@ exports.getLiveAuctions = async (req, res) => {
     });
   }
 };
+
 exports.placeBid = async (req, res) => {
   try {
     const { auction_id: rawAuctionId, amount: rawAmount } = req.body;
@@ -486,6 +487,7 @@ exports.placeBid = async (req, res) => {
       });
     }
 
+    /* ---------- auction must be open ---------- */
     await updateAuctionStatuses();
     const auction = await Auction.findById(auctionId);
     if (!auction) {
@@ -498,7 +500,7 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    /* ---------- inverted rule:  decrement − L1  ---------- */
+    /* ---------- decremental rule ---------- */
     const decrement = Math.max(0, parseFloat(auction.decremental_value) || 0);
     if (decrement > 0) {
       const existingBids = await Bid.findByAuction(auctionId);
@@ -506,21 +508,21 @@ exports.placeBid = async (req, res) => {
         ? Math.min(...existingBids.map(b => parseFloat(b.amount)))
         : parseFloat(auction.current_price || '0');
 
-      const rawCeiling = decrement - lowestBid; // ←  decrement − L1
-      const humanCeiling = Math.max(0, rawCeiling);
+      const rawCeiling = lowestBid - decrement; // real maths
+      const humanCeiling = Math.max(0, rawCeiling); // never negative
 
-      if (bidAmount > rawCeiling) {
+      if (bidAmount > rawCeiling) { // strict: must be ≤ rawCeiling
         return res.status(400).json({
           success: false,
           message:
             rawCeiling < 0
               ? `Bid must be ≤ ${humanCeiling} (price floor reached)`
-              : `Bid must be ≤ ${humanCeiling} (decrement ${decrement} - lowest ${lowestBid})`
+              : `Bid must be ≤ ${humanCeiling} (current lowest ${lowestBid} - decrement ${decrement})`
         });
       }
     }
 
-    /* ---------- auto-register (unchanged) ---------- */
+    /* ---------- auto-register participant ---------- */
     try {
       const [[userRow]] = await db.query(
         'SELECT phone_number FROM users WHERE id = ?', [userId]
@@ -544,7 +546,7 @@ exports.placeBid = async (req, res) => {
       console.warn('Auto-registration skipped:', e.message);
     }
 
-    /* ---------- persist & reply (unchanged) ---------- */
+    /* ---------- persist bid ---------- */
     const bidId = await Bid.create({
       auction_id: auctionId,
       user_id: userId,
@@ -556,6 +558,7 @@ exports.placeBid = async (req, res) => {
       await Bid.setWinningBid(bidId);
     }
 
+    /* ---------- response ---------- */
     const updatedAuction = await Auction.findById(auctionId);
     const bids = await Bid.findByAuction(auctionId);
 
@@ -577,6 +580,7 @@ exports.placeBid = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });
   }
 };
+
 
 exports.closeAuction = async (req, res) => {
   try {
