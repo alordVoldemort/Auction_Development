@@ -1620,84 +1620,67 @@ exports.submitPreBid = async (req, res) => {
 };
 
 // Get pre-bids for an auction
+// Get pre-bids for an auction  (ONLY pending / non-rejected)
 exports.getPreBids = async (req, res) => {
   try {
     const auctionId = parseInt(req.params.id, 10);
-    if (isNaN(auctionId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid auction ID'
-      });
-    }
+    if (isNaN(auctionId))
+      return res.status(400).json({ success: false, message: 'Invalid auction ID' });
 
-    // Verify auction belongs to the requesting user
+    // ownership check
     const auction = await Auction.findById(auctionId);
-    if (!auction) {
-      return res.status(404).json({
-        success: false,
-        message: 'Auction not found'
-      });
-    }
+    if (!auction)
+      return res.status(404).json({ success: false, message: 'Auction not found' });
+    if (auction.created_by !== req.user.userId)
+      return res.status(403).json({ success: false, message: 'Not authorised' });
 
-    if (auction.created_by !== req.user.userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to view pre-bids for this auction'
-      });
-    }
-
-    // Get pre-bids (bids placed before auction goes live)
     let prebids;
+
+    /* 1️⃣  DB with status column  –  exclude rejected  */
     try {
-      // Try with status field first
-      const [result] = await db.query(`
+      const [rows] = await db.query(`
         SELECT 
           b.id,
           b.amount,
           b.bid_time,
-          COALESCE(b.status, 'pending') as status,
+          COALESCE(b.status,'pending')  AS status,
           u.person_name,
           u.company_name,
           u.phone_number,
           u.email
         FROM bids b
-        JOIN users u ON b.user_id = u.id
-        WHERE b.auction_id = ? AND (b.is_winning = 0 OR b.is_winning IS NULL)
+        JOIN users u ON u.id = b.user_id
+        WHERE b.auction_id = ?
+          AND (b.status <> 'rejected' OR b.status IS NULL)   -- ➜  hide rejected
+          AND (b.is_winning = 0 OR b.is_winning IS NULL)
         ORDER BY b.amount ASC, b.bid_time ASC
       `, [auctionId]);
-      prebids = result;
-    } catch (error) {
-      // If status column doesn't exist, fall back to basic query
-      const [result] = await db.query(`
+      prebids = rows;
+    } catch (err) {
+      /* 2️⃣  Fallback:  no status column  –  treat everything as pending  */
+      const [rows] = await db.query(`
         SELECT 
           b.id,
           b.amount,
           b.bid_time,
-          'pending' as status,
+          'pending'                       AS status,
           u.person_name,
           u.company_name,
           u.phone_number,
           u.email
         FROM bids b
-        JOIN users u ON b.user_id = u.id
-        WHERE b.auction_id = ? AND (b.is_winning = 0 OR b.is_winning IS NULL)
+        JOIN users u ON u.id = b.user_id
+        WHERE b.auction_id = ?
+          AND (b.is_winning = 0 OR b.is_winning IS NULL)
         ORDER BY b.amount ASC, b.bid_time ASC
       `, [auctionId]);
-      prebids = result;
+      prebids = rows;
     }
 
-    res.json({
-      success: true,
-      prebids: prebids || []
-    });
-
-  } catch (error) {
-    console.error('❌ Get pre-bids error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+    return res.json({ success: true, prebids });
+  } catch (e) {
+    console.error('❌ getPreBids:', e);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
