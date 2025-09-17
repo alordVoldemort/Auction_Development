@@ -464,7 +464,6 @@ exports.getLiveAuctions = async (req, res) => {
     });
   }
 };
-
 exports.placeBid = async (req, res) => {
   try {
     const { auction_id: rawAuctionId, amount: rawAmount } = req.body;
@@ -479,7 +478,7 @@ exports.placeBid = async (req, res) => {
     }
 
     const auctionId = Number(rawAuctionId);
-    const bidAmount   = Number(rawAmount);
+    const bidAmount = Number(rawAmount);
     if (isNaN(auctionId) || isNaN(bidAmount) || bidAmount <= 0) {
       return res.status(400).json({
         success: false,
@@ -487,8 +486,7 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    /* ---------- auction must be open ---------- */
-    await updateAuctionStatuses(); // nightly housekeeping
+    await updateAuctionStatuses();
     const auction = await Auction.findById(auctionId);
     if (!auction) {
       return res.status(404).json({ success: false, message: 'Auction not found' });
@@ -500,25 +498,29 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    /* ---------- decremental rule ---------- */
+    /* ---------- inverted rule:  decrement − L1  ---------- */
     const decrement = Math.max(0, parseFloat(auction.decremental_value) || 0);
     if (decrement > 0) {
-      // real lowest bid in the DB right now
       const existingBids = await Bid.findByAuction(auctionId);
       const lowestBid = existingBids.length
         ? Math.min(...existingBids.map(b => parseFloat(b.amount)))
         : parseFloat(auction.current_price || '0');
 
-      const ceiling = lowestBid - decrement; // ≤ L1 − decrement
-      if (bidAmount > ceiling) { // STRICT: must be **≤**
+      const rawCeiling = decrement - lowestBid; // ←  decrement − L1
+      const humanCeiling = Math.max(0, rawCeiling);
+
+      if (bidAmount > rawCeiling) {
         return res.status(400).json({
           success: false,
-          message: `Bid must be ≤ ${ceiling} (current lowest ${lowestBid} - decrement ${decrement})`
+          message:
+            rawCeiling < 0
+              ? `Bid must be ≤ ${humanCeiling} (price floor reached)`
+              : `Bid must be ≤ ${humanCeiling} (decrement ${decrement} - lowest ${lowestBid})`
         });
       }
     }
 
-    /* ---------- auto-register participant (your existing code) ---------- */
+    /* ---------- auto-register (unchanged) ---------- */
     try {
       const [[userRow]] = await db.query(
         'SELECT phone_number FROM users WHERE id = ?', [userId]
@@ -542,22 +544,18 @@ exports.placeBid = async (req, res) => {
       console.warn('Auto-registration skipped:', e.message);
     }
 
-    /* ---------- persist bid ---------- */
+    /* ---------- persist & reply (unchanged) ---------- */
     const bidId = await Bid.create({
       auction_id: auctionId,
       user_id: userId,
       amount: bidAmount
     });
 
-    // keep auction's "current price" in sync
     await Auction.updateCurrentPrice(auctionId, bidAmount);
-
-    // mark winning bid only when auction is live
     if (auction.status.toLowerCase() === 'live') {
       await Bid.setWinningBid(bidId);
     }
 
-    /* ---------- response ---------- */
     const updatedAuction = await Auction.findById(auctionId);
     const bids = await Bid.findByAuction(auctionId);
 
