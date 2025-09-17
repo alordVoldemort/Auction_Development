@@ -354,6 +354,7 @@ exports.getAuctionDetails = async (req, res) => {
       is_creator: isCreator,
       has_joined: isParticipant,
       has_bid: hasBid,
+      open_to_all: auction.open_to_all,  
       creator_info: creator ? {
         company_name: creator.company_name,
         person_name: creator.person_name,
