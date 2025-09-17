@@ -502,16 +502,16 @@ exports.placeBid = async (req, res) => {
 
     /* ---------- decremental rule ---------- */
     const decrement = Math.max(0, parseFloat(auction.decremental_value) || 0);
-    if (decrement > 0) {
-      const existingBids = await Bid.findByAuction(auctionId);
-      const lowestBid = existingBids.length
-        ? Math.min(...existingBids.map(b => parseFloat(b.amount)))
-        : parseFloat(auction.current_price || '0');
 
-      const rawCeiling = lowestBid - decrement; // real maths
-      const humanCeiling = Math.max(0, rawCeiling); // never negative
+    const existingBids = await Bid.findByAuction(auctionId);
 
-      if (bidAmount > rawCeiling) { // strict: must be ≤ rawCeiling
+    if (existingBids.length > 0) {
+      // Subsequent bids: check decremental rule
+      const lowestBid = Math.min(...existingBids.map(b => parseFloat(b.amount)));
+      const rawCeiling = lowestBid - decrement;
+      const humanCeiling = Math.max(0, rawCeiling);
+
+      if (bidAmount > rawCeiling) {
         return res.status(400).json({
           success: false,
           message:
@@ -520,7 +520,7 @@ exports.placeBid = async (req, res) => {
               : `Bid must be ≤ ${humanCeiling} (current lowest ${lowestBid} - decrement ${decrement})`
         });
       }
-    }
+    } // First bid can be any positive value
 
     /* ---------- auto-register participant ---------- */
     try {
@@ -580,7 +580,6 @@ exports.placeBid = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });
   }
 };
-
 
 exports.closeAuction = async (req, res) => {
   try {
