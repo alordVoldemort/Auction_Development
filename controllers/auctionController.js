@@ -467,117 +467,97 @@ exports.getLiveAuctions = async (req, res) => {
 
 exports.placeBid = async (req, res) => {
   try {
-    let { auction_id, amount } = req.body;
-    const user_id = req.user.userId;
+    const { auction_id: rawAuctionId, amount: rawAmount } = req.body;
+    const userId = req.user.userId;
 
-    if (!auction_id || !amount) {
+    /* ---------- basic validation ---------- */
+    if (!rawAuctionId || !rawAmount) {
       return res.status(400).json({
         success: false,
         message: 'Auction ID and bid amount are required'
       });
     }
 
-    // Update statuses before processing bid
-    await updateAuctionStatuses();
-    
-    const auctionId = parseInt(auction_id, 10);
-    if (isNaN(auctionId)) {
+    const auctionId = Number(rawAuctionId);
+    const bidAmount   = Number(rawAmount);
+    if (isNaN(auctionId) || isNaN(bidAmount) || bidAmount <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid auction ID'
+        message: 'Invalid auction ID or bid amount'
       });
     }
 
+    /* ---------- auction must be open ---------- */
+    await updateAuctionStatuses(); // nightly housekeeping
     const auction = await Auction.findById(auctionId);
     if (!auction) {
-      return res.status(404).json({
-        success: false,
-        message: 'Auction not found'
-      });
+      return res.status(404).json({ success: false, message: 'Auction not found' });
     }
-
-    // ✅ ALLOW bids for both upcoming AND live auctions
-    if (auction.status.toLowerCase() !== 'live' && auction.status.toLowerCase() !== 'upcoming') {
+    if (!['live', 'upcoming'].includes(auction.status.toLowerCase())) {
       return res.status(400).json({
         success: false,
         message: 'Bids can only be placed on upcoming or live auctions'
       });
     }
 
-    const parsePrice = (val) => {
-      if (!val) return 0;
-      return parseFloat(val.toString().replace(/[^\d.-]/g, '')) || 0;
-    };
-
-    const currentPrice = parsePrice(auction.current_price);
-    const decrementalValue = parsePrice(auction.decremental_value);
-
-    const bidAmount = parseFloat(amount);
-    if (isNaN(bidAmount) || bidAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid bid amount'
-      });
-    }
-
-    // Check auction type (decremental) - bid must be at least (lowest_bid - decremental_value)
-    if (decrementalValue > 0) {
-      // Get current lowest bid from existing bids
+    /* ---------- decremental rule ---------- */
+    const decrement = Math.max(0, parseFloat(auction.decremental_value) || 0);
+    if (decrement > 0) {
+      // real lowest bid in the DB right now
       const existingBids = await Bid.findByAuction(auctionId);
-      let lowestBid = currentPrice; // Start with auction starting price
-      
-      if (existingBids && existingBids.length > 0) {
-        lowestBid = Math.min(...existingBids.map(b => parseFloat(b.amount || currentPrice)));
-      }
-      
-      const minimumAllowedBid = lowestBid - decrementalValue;
-      
-      if (bidAmount < minimumAllowedBid) {
+      const lowestBid = existingBids.length
+        ? Math.min(...existingBids.map(b => parseFloat(b.amount)))
+        : parseFloat(auction.current_price || '0');
+
+      const ceiling = lowestBid - decrement; // ≤ L1 − decrement
+      if (bidAmount > ceiling) { // STRICT: must be **≤**
         return res.status(400).json({
           success: false,
-          message: `Bid must be at least ${minimumAllowedBid} (lowest bid ${lowestBid} - decremental value ${decrementalValue})`
+          message: `Bid must be ≤ ${ceiling} (current lowest ${lowestBid} - decrement ${decrement})`
         });
       }
     }
 
-    // Auto-register user as participant if not already registered
+    /* ---------- auto-register participant (your existing code) ---------- */
     try {
-      const [userRows] = await db.query('SELECT phone_number FROM users WHERE id = ?', [user_id]);
-      if (userRows && userRows.length > 0) {
-        const phone_number = userRows[0].phone_number;
-        
-        const [participantCheck] = await db.query(
-          'SELECT * FROM auction_participants WHERE auction_id = ? AND phone_number = ?',
-          [auctionId, phone_number]
+      const [[userRow]] = await db.query(
+        'SELECT phone_number FROM users WHERE id = ?', [userId]
+      );
+      if (userRow) {
+        const phone = userRow.phone_number;
+        const [[participant]] = await db.query(
+          'SELECT id FROM auction_participants WHERE auction_id = ? AND phone_number = ?',
+          [auctionId, phone]
         );
-        
-        if (!participantCheck || participantCheck.length === 0) {
+        if (!participant) {
           await db.query(
-            'INSERT INTO auction_participants (auction_id, phone_number, user_id, status, joined_at) VALUES (?, ?, ?, ?, NOW())',
-            [auctionId, phone_number, user_id, 'approved']
+            `INSERT INTO auction_participants
+             (auction_id, phone_number, user_id, status, joined_at)
+             VALUES (?, ?, ?, 'approved', NOW())`,
+            [auctionId, phone, userId]
           );
-          console.log(`Auto-registered user ${phone_number} for auction ${auctionId} during bid`);
         }
       }
-    } catch (autoRegError) {
-      console.warn('Auto-registration failed but continuing with bid:', autoRegError);
+    } catch (e) {
+      console.warn('Auto-registration skipped:', e.message);
     }
 
-    // Save bid
+    /* ---------- persist bid ---------- */
     const bidId = await Bid.create({
       auction_id: auctionId,
-      user_id,
+      user_id: userId,
       amount: bidAmount
     });
 
-    // Update auction current price
+    // keep auction's "current price" in sync
     await Auction.updateCurrentPrice(auctionId, bidAmount);
-    
-    // Set as winning bid only for live auctions
+
+    // mark winning bid only when auction is live
     if (auction.status.toLowerCase() === 'live') {
       await Bid.setWinningBid(bidId);
     }
 
+    /* ---------- response ---------- */
     const updatedAuction = await Auction.findById(auctionId);
     const bids = await Bid.findByAuction(auctionId);
 
@@ -587,22 +567,16 @@ exports.placeBid = async (req, res) => {
       bid: {
         id: bidId,
         auction_id: auctionId,
-        user_id,
+        user_id: userId,
         amount: bidAmount,
-        bid_time: new Date(),
-        status: auction.status // Include auction status in response
+        bid_time: new Date()
       },
       auction: updatedAuction,
       bids
     });
-
-  } catch (error) {
-    console.error('❌ Place bid error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+  } catch (err) {
+    console.error('❌ placeBid error:', err);
+    res.status(500).json({ success: false, message: 'Server error', error: err.message });
   }
 };
 
