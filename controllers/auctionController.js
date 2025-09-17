@@ -1793,6 +1793,7 @@ exports.approvePreBid = async (req, res) => {
 };
 
 // Reject a pre-bid
+// Reject a pre-bid
 exports.rejectPreBid = async (req, res) => {
   try {
     const preBidId = parseInt(req.params.id, 10);
@@ -1805,7 +1806,7 @@ exports.rejectPreBid = async (req, res) => {
 
     // Get the pre-bid and verify ownership
     const [prebidRows] = await db.query(`
-      SELECT b.*, a.created_by
+      SELECT b.*, a.created_by, a.id as auction_id
       FROM bids b
       JOIN auctions a ON b.auction_id = a.id
       WHERE b.id = ?
@@ -1827,21 +1828,84 @@ exports.rejectPreBid = async (req, res) => {
       });
     }
 
-    // Update pre-bid status to rejected
+    // Start transaction for consistent state
+    const conn = await db.getConnection();
+    await conn.beginTransaction();
+
     try {
-      await db.query(
-        'UPDATE bids SET status = "rejected" WHERE id = ?',
+      // Update pre-bid status to rejected
+      try {
+        await conn.query(
+          'UPDATE bids SET status = "rejected", is_winning = 0 WHERE id = ?',
+          [preBidId]
+        );
+      } catch (error) {
+        // If status column doesn't exist, just update is_winning
+        await conn.query(
+          'UPDATE bids SET is_winning = 0 WHERE id = ?',
+          [preBidId]
+        );
+      }
+
+      // Check if this was the winning bid
+      const [wasWinning] = await conn.query(
+        'SELECT is_winning FROM bids WHERE id = ? AND is_winning = 1',
         [preBidId]
       );
-    } catch (error) {
-      // If status column doesn't exist, we could delete the bid or mark it differently
-      console.log('Note: Status column not available, pre-bid conceptually rejected');
-    }
 
-    res.json({
-      success: true,
-      message: 'Pre-bid rejected successfully'
-    });
+      if (wasWinning && wasWinning.length > 0) {
+        // Find the next best active bid
+        const [nextBestBid] = await conn.query(`
+          SELECT id, amount 
+          FROM bids 
+          WHERE auction_id = ? 
+            AND id != ? 
+            AND (status != 'rejected' OR status IS NULL)
+          ORDER BY amount ASC, bid_time ASC 
+          LIMIT 1
+        `, [prebid.auction_id, preBidId]);
+
+        if (nextBestBid && nextBestBid.length > 0) {
+          // Set new winning bid
+          await conn.query(
+            'UPDATE bids SET is_winning = 1 WHERE id = ?',
+            [nextBestBid[0].id]
+          );
+          
+          // Update auction current price
+          await conn.query(
+            'UPDATE auctions SET current_price = ? WHERE id = ?',
+            [nextBestBid[0].amount, prebid.auction_id]
+          );
+        } else {
+          // No other bids, reset to starting price
+          const [auction] = await conn.query(
+            'SELECT decremental_value FROM auctions WHERE id = ?',
+            [prebid.auction_id]
+          );
+          
+          if (auction && auction.length > 0) {
+            await conn.query(
+              'UPDATE auctions SET current_price = ? WHERE id = ?',
+              [auction[0].decremental_value, prebid.auction_id]
+            );
+          }
+        }
+      }
+
+      await conn.commit();
+      
+      res.json({
+        success: true,
+        message: 'Pre-bid rejected successfully'
+      });
+
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
 
   } catch (error) {
     console.error('❌ Reject pre-bid error:', error);
