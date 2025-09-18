@@ -397,8 +397,8 @@ exports.getAuctionDetails = async (req, res) => {
   total_participants: participants.length,
   total_bids: bids.length,
   active_participants: participants.filter(p => p.status === 'joined').length,
-  highest_bid: bids.length > 0 ? Math.max(...bids.map(b => parseFloat(b.amount || 0))) : parseFloat(auction.current_price || 0),
-  lowest_bid: bids.length > 0 ? Math.min(...bids.map(b => parseFloat(b.amount || 0))) : parseFloat(auction.current_price || 0)
+  highest_bid: bids.length > 0 ? Math.max(...bids.map(b => parseFloat(b.amount || 0))) : null,
+  lowest_bid: bids.length > 0 ? Math.min(...bids.map(b => parseFloat(b.amount || 0))) : null
 }
     };
 
