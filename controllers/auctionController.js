@@ -358,7 +358,8 @@ exports.getAuctionDetails = async (req, res) => {
       creator_info: creator ? {
         company_name: creator.company_name,
         person_name: creator.person_name,
-        phone: creator.phone_number
+        phone: creator.phone_number,
+        email: creator.email,
       } : null,
       winner_info: winner ? {
         user_id: winner.user_id,
