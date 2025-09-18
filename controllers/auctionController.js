@@ -1346,7 +1346,7 @@ exports.downloadReport = async (req, res) => {
 
 async function getUserById(userId) {
   const [rows] = await db.query(
-    'SELECT id, company_name, person_name, phone_number FROM users WHERE id = ?',
+    'SELECT id, company_name, person_name, phone_number, email FROM users WHERE id = ?',
     [userId]
   );
   return rows[0] || null;
