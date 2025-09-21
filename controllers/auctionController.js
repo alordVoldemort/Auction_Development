@@ -49,6 +49,14 @@ function formatTimeToAMPM(timeValue) {
   return `${displayH}:${m.toString().padStart(2, '0')} ${ampm}`;
 }
 
+/* ----- internal notification helpers ----- */
+async function notify(userId, type, auctionId, message) {
+  await db.query(
+    `INSERT INTO notifications (user_id, type, auction_id, message, created_at)
+     VALUES (?, ?, ?, ?, NOW())`,
+    [userId, type, auctionId, message]
+  );
+}
 // ------------------------------------------------------------------
 // status updater & cron
 // ------------------------------------------------------------------
@@ -189,6 +197,11 @@ exports.createAuction = async (req, res) => {
           }
         }
       }
+    }
+    // notify creator
+    if (participantList.length) {
+      await notify(created_by, 'participant_added', auctionId,
+        `${participantList.length} participant(s) added to your auction “${title}”.`);
     }
 
     let uploadedDocs = [];
@@ -609,7 +622,12 @@ exports.closeAuction = async (req, res) => {
 
     // Update auction status to completed
     await Auction.updateStatus(id, 'completed', winnerId);
-    
+
+    // notify winner
+if (winnerId) {
+  const winnerMsg = `🎉 You won auction "${auction.title}" with bid ${winningBid.amount} ${auction.currency}.`;
+  await notify(winnerId, 'won_auction', id, winnerMsg);
+}
     // Update end time to current time
     const currentTime = new Date().toTimeString().split(' ')[0];
     await db.query(
@@ -1752,7 +1770,7 @@ exports.approvePreBid = async (req, res) => {
   }
 };
 
-// Reject a pre-bid
+
 // Reject a pre-bid
 exports.rejectPreBid = async (req, res) => {
   try {
