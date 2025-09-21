@@ -17,6 +17,7 @@ const adminRoutes = require('./routes/adminRoutes');
 const adminUserRoutes = require('./routes/adminUserRoutes');
 const adminAuctionRoutes = require('./routes/admin-auction-routes');
 const adminReportsRoutes = require('./routes/adminReportsRoutes');
+const notificationsRoutes  = require('./routes/notificationsRoutes');
 // const { initWebSocketServer } = require('./controllers/auctionController');
 
 const app = express();
@@ -62,6 +63,7 @@ app.use('/api/fulldashboard', adminRoutes);
 app.use('/api/user/admin', adminUserRoutes);
 app.use('/api/admin/auctions', adminAuctionRoutes);
 app.use('/api/admin/reports', adminReportsRoutes);
+app.use('/api/notifications',  notificationsRoutes);
 
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
