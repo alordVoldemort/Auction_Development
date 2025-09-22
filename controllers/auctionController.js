@@ -1172,7 +1172,7 @@ exports.getFilteredAuctions = async (req, res) => {
              EXISTS(SELECT 1 FROM bids WHERE auction_id = a.id AND user_id = ?) as has_participated
       FROM auctions a 
       JOIN users u ON a.created_by = u.id 
-      WHERE 1=1
+      WHERE (a.open_to_all = 1 OR EXISTS(SELECT 1 FROM auction_participants WHERE auction_id = a.id))
     `;
     
     const params = [userId];
