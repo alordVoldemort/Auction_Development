@@ -50,13 +50,19 @@ function formatTimeToAMPM(timeValue) {
 }
 
 /* ----- internal notification helpers ----- */
-async function notify(userId, type, auctionId, message) {
-  await db.query(
-    `INSERT INTO notifications (user_id, type, auction_id, message, created_at)
-     VALUES (?, ?, ?, ?, NOW())`,
-    [userId, type, auctionId, message]
-  );
+async function notify(userIds, type, auctionId, message) {
+  // Handle single user or array of users
+  const userIdArray = Array.isArray(userIds) ? userIds : [userIds];
+  
+  for (const userId of userIdArray) {
+    await db.query(
+      `INSERT INTO notifications (user_id, type, auction_id, message, created_at)
+       VALUES (?, ?, ?, ?, NOW())`,
+      [userId, type, auctionId, message]
+    );
+  }
 }
+
 // ------------------------------------------------------------------
 // status updater & cron
 // ------------------------------------------------------------------
@@ -198,12 +204,29 @@ exports.createAuction = async (req, res) => {
         }
       }
     }
-    // notify creator
-    if (participantList.length) {
-      await notify(created_by, 'participant_added', auctionId,
-        `${participantList.length} participant(s) added to your auction “${title}”.`);
+    // notify creator AND participants
+if (participantList.length) {
+  // Notify creator
+  await notify(created_by, 'participant_added', auctionId,
+    `${participantList.length} participant(s) added to your auction "${title}".`);
+  
+  // Notify each participant
+  const participantMessage = `You've been added to auction "${title}" on ${auction_date} at ${start_time}.`;
+  
+  // Get user IDs for participants by phone numbers
+  const phoneNumbers = participantList.map(p => p.replace(/[^0-9]/g, ''));
+  if (phoneNumbers.length > 0) {
+    const [users] = await db.query(
+      'SELECT id FROM users WHERE phone_number IN (?)',
+      [phoneNumbers]
+    );
+    
+    const participantUserIds = users.map(user => user.id);
+    if (participantUserIds.length > 0) {
+      await notify(participantUserIds, 'added_to_auction', auctionId, participantMessage);
     }
-
+  }
+}
     let uploadedDocs = [];
     if (req.files?.length) {
       for (const file of req.files) {
@@ -682,10 +705,18 @@ exports.closeAuction = async (req, res) => {
     // Update auction status to completed
     await Auction.updateStatus(id, 'completed', winnerId);
 
-    // notify winner
+    // notify winner AND creator
 if (winnerId) {
   const winnerMsg = `🎉 You won auction "${auction.title}" with bid ${winningBid.amount} ${auction.currency}.`;
   await notify(winnerId, 'won_auction', id, winnerMsg);
+  
+  // Also notify auction creator about the winner
+  const creatorMsg = `Auction "${auction.title}" has been won by a participant with bid ${winningBid.amount} ${auction.currency}.`;
+  await notify(auction.created_by, 'auction_completed', id, creatorMsg);
+} else {
+  // Notify creator if no winner
+  const noWinnerMsg = `Auction "${auction.title}" completed with no winning bid.`;
+  await notify(auction.created_by, 'auction_completed', id, noWinnerMsg);
 }
     // Update end time to current time
     const currentTime = new Date().toTimeString().split(' ')[0];
