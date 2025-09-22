@@ -572,6 +572,65 @@ exports.placeBid = async (req, res) => {
       await Bid.setWinningBid(bidId);
     }
 
+    /* ---------- NOTIFICATIONS ---------- */
+    try {
+      // Get user info for notification
+      const [[bidderInfo]] = await db.query(
+        'SELECT person_name, company_name FROM users WHERE id = ?', 
+        [userId]
+      );
+
+      // 1. Notify auction creator about the new bid
+      const creatorMessage = `New bid of ${bidAmount} ${auction.currency} placed by ${bidderInfo.person_name || 'a participant'} from ${bidderInfo.company_name || 'unknown company'} on your auction "${auction.title}".`;
+      
+      await db.query(
+        `INSERT INTO notifications (user_id, type, auction_id, message, created_at)
+         VALUES (?, ?, ?, ?, NOW())`,
+        [auction.created_by, 'new_bid', auctionId, creatorMessage]
+      );
+
+      // 2. Notify all other participants about the new bid (except the bidder)
+      const participants = await AuctionParticipant.findByAuction(auctionId);
+      const participantIds = participants
+        .filter(p => p.user_id && p.user_id !== userId)
+        .map(p => p.user_id);
+
+      if (participantIds.length > 0) {
+        const participantMessage = `New bid of ${bidAmount} ${auction.currency} placed on auction "${auction.title}".`;
+        
+        for (const participantId of participantIds) {
+          await db.query(
+            `INSERT INTO notifications (user_id, type, auction_id, message, created_at)
+             VALUES (?, ?, ?, ?, NOW())`,
+            [participantId, 'new_bid', auctionId, participantMessage]
+          );
+        }
+      }
+
+      // 3. If this is the new winning bid, notify the previous winner (if any)
+      if (auction.status.toLowerCase() === 'live') {
+        const [previousWinningBids] = await db.query(
+          'SELECT user_id FROM bids WHERE auction_id = ? AND is_winning = 1 AND user_id != ?',
+          [auctionId, userId]
+        );
+
+        if (previousWinningBids.length > 0) {
+          const previousWinnerId = previousWinningBids[0].user_id;
+          const outbidMessage = `You've been outbid on auction "${auction.title}". Current winning bid is ${bidAmount} ${auction.currency}.`;
+          
+          await db.query(
+            `INSERT INTO notifications (user_id, type, auction_id, message, created_at)
+             VALUES (?, ?, ?, ?, NOW())`,
+            [previousWinnerId, 'outbid', auctionId, outbidMessage]
+          );
+        }
+      }
+
+    } catch (notificationError) {
+      console.warn('Notification creation failed:', notificationError.message);
+      // Don't fail the bid placement if notifications fail
+    }
+
     /* ---------- response ---------- */
     const updatedAuction = await Auction.findById(auctionId);
     const bids = await Bid.findByAuction(auctionId);
