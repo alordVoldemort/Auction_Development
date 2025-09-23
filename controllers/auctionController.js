@@ -1861,7 +1861,7 @@ exports.approvePreBid = async (req, res) => {
 };
 
 
-// Reject a pre-bid
+// Reject and delete a pre-bid
 exports.rejectPreBid = async (req, res) => {
   try {
     const preBidId = parseInt(req.params.id, 10);
@@ -1901,37 +1901,28 @@ exports.rejectPreBid = async (req, res) => {
     await conn.beginTransaction();
 
     try {
-      // Update pre-bid status to rejected
-      try {
-        await conn.query(
-          'UPDATE bids SET status = "rejected", is_winning = 0 WHERE id = ?',
-          [preBidId]
-        );
-      } catch (error) {
-        // If status column doesn't exist, just update is_winning
-        await conn.query(
-          'UPDATE bids SET is_winning = 0 WHERE id = ?',
-          [preBidId]
-        );
-      }
-
       // Check if this was the winning bid
       const [wasWinning] = await conn.query(
         'SELECT is_winning FROM bids WHERE id = ? AND is_winning = 1',
         [preBidId]
       );
 
+      // Store auction_id before deleting
+      const auctionId = prebid.auction_id;
+
+      // DELETE the pre-bid completely from database
+      await conn.query('DELETE FROM bids WHERE id = ?', [preBidId]);
+
+      // If it was winning bid, find new winner
       if (wasWinning && wasWinning.length > 0) {
         // Find the next best active bid
         const [nextBestBid] = await conn.query(`
           SELECT id, amount 
           FROM bids 
           WHERE auction_id = ? 
-            AND id != ? 
-            AND (status != 'rejected' OR status IS NULL)
           ORDER BY amount ASC, bid_time ASC 
           LIMIT 1
-        `, [prebid.auction_id, preBidId]);
+        `, [auctionId]);
 
         if (nextBestBid && nextBestBid.length > 0) {
           // Set new winning bid
@@ -1943,19 +1934,19 @@ exports.rejectPreBid = async (req, res) => {
           // Update auction current price
           await conn.query(
             'UPDATE auctions SET current_price = ? WHERE id = ?',
-            [nextBestBid[0].amount, prebid.auction_id]
+            [nextBestBid[0].amount, auctionId]
           );
         } else {
           // No other bids, reset to starting price
           const [auction] = await conn.query(
             'SELECT decremental_value FROM auctions WHERE id = ?',
-            [prebid.auction_id]
+            [auctionId]
           );
           
           if (auction && auction.length > 0) {
             await conn.query(
               'UPDATE auctions SET current_price = ? WHERE id = ?',
-              [auction[0].decremental_value, prebid.auction_id]
+              [auction[0].decremental_value, auctionId]
             );
           }
         }
@@ -1965,7 +1956,7 @@ exports.rejectPreBid = async (req, res) => {
       
       res.json({
         success: true,
-        message: 'Pre-bid rejected successfully'
+        message: 'Pre-bid rejected and deleted successfully'
       });
 
     } catch (error) {
