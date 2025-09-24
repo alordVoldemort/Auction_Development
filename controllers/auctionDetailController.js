@@ -74,19 +74,16 @@ exports.getAuctionBids = async (req, res) => {
 
 // Get auction report by ID
 exports.getAuctionReport = async (req, res) => {
-    const auctionId = parseInt(req.params.id);
+    const auctionId = req.params.id;
 
-    if (!auctionId || isNaN(auctionId) || auctionId <= 0) {
-        return res.status(400).json({ 
-            message: "Invalid auction ID",
-            details: "Auction ID must be a positive integer"
-        });
+    if (!auctionId || isNaN(auctionId)) {
+        return res.status(400).json({ message: "Invalid auction ID" });
     }
 
     try {
         console.log(`Fetching auction report for ID: ${auctionId}`);
 
-        // 1. Fetch auction details
+        // 1. Fetch auction details - using correct columns from your table
         const [auctionResults] = await db.query(
             `SELECT 
                 id, 
@@ -112,107 +109,41 @@ exports.getAuctionReport = async (req, res) => {
         );
 
         if (!auctionResults || auctionResults.length === 0) {
-            return res.status(404).json({ 
-                message: "Auction not found",
-                auctionId: auctionId
-            });
+            return res.status(404).json({ message: "Auction not found" });
         }
 
         const auction = auctionResults[0];
 
-        // Format date as DD-MM-YYYY
-        const formatDate = (dateString) => {
-            if (!dateString) return null;
-            const date = new Date(dateString);
-            const day = String(date.getDate()).padStart(2, '0');
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const year = date.getFullYear();
-            return `${day}-${month}-${year}`; // Returns "24-09-2025"
-        };
+        // 2. Fetch bids summary with bid ranks
+        const [bids] = await db.query(
+            `SELECT 
+                u.company_name,
+                u.id as user_id,
+                MIN(b.amount) AS pre_bid_offer,
+                MAX(b.amount) AS final_bid_offer,
+                COUNT(b.id) AS total_bids,
+                RANK() OVER (ORDER BY MAX(b.amount) DESC) AS bid_rank
+            FROM bids b
+            JOIN users u ON b.user_id = u.id
+            WHERE b.auction_id = ?
+            GROUP BY u.id, u.company_name
+            ORDER BY bid_rank ASC`,
+            [auctionId]
+        );
 
-        // Format time as HH:MM:SS (keep as is)
-        const formatTime = (timeString) => {
-            if (!timeString) return null;
-            if (typeof timeString === 'string' && timeString.match(/^\d{2}:\d{2}:\d{2}$/)) {
-                return timeString;
+        // 3. Return combined response
+        res.json({
+            ...auction,
+            bids: bids,
+            summary: {
+                total_bidders: bids.length,
+                highest_bid: bids.length > 0 ? bids[0].final_bid_offer : auction.current_price || 0
             }
-            const date = new Date(timeString);
-            return date.toTimeString().split(' ')[0];
-        };
-
-        // 2. Fetch bids summary
-        let bids = [];
-        try {
-            const [bidResults] = await db.query(
-                `SELECT 
-                    u.company_name,
-                    u.id as user_id,
-                    MIN(b.amount) AS pre_bid_offer,
-                    MAX(b.amount) AS final_bid_offer,
-                    COUNT(b.id) AS total_bids,
-                    RANK() OVER (ORDER BY MAX(b.amount) DESC) AS bid_rank
-                FROM bids b
-                JOIN users u ON b.user_id = u.id
-                WHERE b.auction_id = ?
-                GROUP BY u.id, u.company_name
-                ORDER BY bid_rank ASC`,
-                [auctionId]
-            );
-            bids = bidResults || [];
-        } catch (bidError) {
-            console.warn("Error fetching bids:", bidError.message);
-        }
-
-        // 3. Prepare response with consistent date format
-        const response = {
-            success: true,
-            auction: {
-                ...auction,
-                // Format dates as DD-MM-YYYY
-                auction_date: formatDate(auction.auction_date), // Now returns "24-09-2025"
-                start_time: formatTime(auction.start_time),     // Returns "13:26:00"
-                end_time: formatTime(auction.end_time),         // Returns "15:26:00"
-                pre_bid_allowed: Boolean(auction.pre_bid_allowed),
-                
-                // Add additional formatted fields like your other API
-                formatted_start_time: formatTimeTo12Hour(auction.start_time), // "01:26 PM"
-                formatted_end_time: formatTimeTo12Hour(auction.end_time),     // "03:26 PM"
-                auction_no: `AUC${auction.id}`,
-                
-                // Add other fields that match your API structure
-                open_to_all: auction.open_to_all || false,
-                time_remaining: calculateTimeRemaining(auction.end_time),
-                time_status: getTimeStatus(auction.start_time, auction.end_time),
-                time_value: "",
-                is_creator: req.user?.id === auction.created_by,
-                has_joined: false,
-                has_bid: bids.some(bid => bid.user_id === req.user?.id),
-                
-                // Add nested objects
-                creator_info: await getCreatorInfo(auction.created_by),
-                winner_info: auction.winner_id ? await getWinnerInfo(auction.winner_id) : null,
-                participants: await getParticipants(auctionId),
-                documents: await getDocuments(auctionId),
-                bids: bids,
-                statistics: {
-                    total_participants: (await getParticipants(auctionId)).length,
-                    total_bids: bids.reduce((sum, bid) => sum + (bid.total_bids || 0), 0),
-                    active_participants: (await getParticipants(auctionId)).filter(p => p.status === 'joined').length,
-                    highest_bid: bids.length > 0 ? bids[0].final_bid_offer : null,
-                    lowest_bid: bids.length > 0 ? bids.reduce((min, bid) => 
-                        parseFloat(bid.final_bid_offer) < parseFloat(min) ? bid.final_bid_offer : min, 
-                        bids[0].final_bid_offer
-                    ) : null
-                }
-            }
-        };
-
-        res.json(response);
+        });
 
     } catch (err) {
         console.error("Error fetching auction report:", err);
         res.status(500).json({ 
-            success: false,
             message: "Internal server error",
             error: err.message
         });
