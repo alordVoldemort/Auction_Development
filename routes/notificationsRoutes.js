@@ -13,4 +13,6 @@ const {
 router.get('/my-notification',  getMyNotifications);
 router.get('/notifications/participants/:auctionId',  getParticipantNotifications);
 
+router.patch('/notifications/:id/read', markAsRead);
+
 module.exports = router;
