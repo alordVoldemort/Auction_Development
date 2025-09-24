@@ -83,12 +83,11 @@ exports.getAuctionReport = async (req, res) => {
     try {
         console.log(`Fetching auction report for ID: ${auctionId}`);
 
-        // 1. Fetch auction details - using correct column names from your table
+        // 1. Fetch auction details - using correct columns from your table
         const [auctionResults] = await db.query(
             `SELECT 
                 id, 
                 title, 
-                decremental_value,
                 description, 
                 auction_date, 
                 start_time, 
@@ -96,18 +95,18 @@ exports.getAuctionReport = async (req, res) => {
                 duration,
                 currency,
                 current_price,
+                decremental_value,
                 pre_bid_allowed,
                 status,
                 created_by,
                 winner_id,
                 created_at,
-                updated_at
+                updated_at,
+                winner_notified
             FROM auctions 
             WHERE id = ?`,
             [auctionId]
         );
-
-        console.log(`Auction results:`, auctionResults);
 
         if (!auctionResults || auctionResults.length === 0) {
             return res.status(404).json({ message: "Auction not found" });
@@ -132,11 +131,9 @@ exports.getAuctionReport = async (req, res) => {
             [auctionId]
         );
 
-        console.log(`Bids found:`, bids.length);
-
         // 3. Return combined response
         res.json({
-            auction: auction,
+            ...auction,
             bids: bids,
             summary: {
                 total_bidders: bids.length,
@@ -152,7 +149,6 @@ exports.getAuctionReport = async (req, res) => {
         });
     }
 };
-
 // Get all auctions for dropdown
 exports.getAllAuctions = async (req, res) => {
   try {
