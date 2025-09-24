@@ -320,6 +320,9 @@ exports.updateDecrementalValue = async (req, res) => {
 /* ------------------------------------------------------------------
    GET AUCTION DETAILS – fixed end-time formatter
    ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------
+   GET AUCTION DETAILS – returns ALL participant rows (no status filter)
+   ------------------------------------------------------------------ */
 exports.getAuctionDetails = async (req, res) => {
   try {
     const { id } = req.params;
@@ -338,19 +341,34 @@ exports.getAuctionDetails = async (req, res) => {
     if (!isCreator && !isParticipant && !hasBid && !auction.open_to_all)
       return res.status(403).json({ success: false, message: 'You do not have access to this auction' });
 
-    const [participants, bids, documents, winner, creator] = await Promise.all([
-      AuctionParticipant.findByAuction(id),
+    /* ----------  NEW:  fetch every row for this auction  ---------- */
+    const [participantsRows] = await db.query(
+      `SELECT ap.id,
+              ap.user_id,
+              ap.phone_number,
+              ap.status,
+              ap.invited_at,
+              ap.joined_at,
+              u.person_name,
+              u.company_name
+       FROM auction_participants ap
+       LEFT JOIN users u ON u.phone_number = ap.phone_number
+       WHERE ap.auction_id = ?`,
+      [id]
+    );
+
+    const [bids, documents, winner, creator] = await Promise.all([
       Bid.findByAuction(id),
       AuctionDocument.findByAuction(id),
       Bid.findWinningBid(id),
       getUserById(auction.created_by)
     ]);
 
-    // ----  FIXED:  always show correct end time  ----
+    /* ----------  time helpers (unchanged)  ---------- */
     const formattedEndTime = auction.end_time
-  ? formatTimeToAMPM(auction.end_time)
-  : formatTimeToAMPM(calcEndTimeHHMMSS(auction.start_time, auction.duration / 60)); // ← divide by 60
-  
+      ? formatTimeToAMPM(auction.end_time)
+      : formatTimeToAMPM(calcEndTimeHHMMSS(auction.start_time, auction.duration / 60));
+
     const now = new Date();
     const auctionDateTime = new Date(`${auction.auction_date}T${auction.start_time}`);
     const endDateTime = new Date(auctionDateTime.getTime() + auction.duration * 1000);
@@ -379,66 +397,59 @@ exports.getAuctionDetails = async (req, res) => {
       } else timeStatus = 'Starting soon';
     }
 
-    const formattedAuction = {
-      ...auction,
-      auction_no: `AUC${auction.id.toString().padStart(3, '0')}`,
-      formatted_start_time: formatTimeToAMPM(auction.start_time),
-      formatted_end_time: formattedEndTime,               // ← never “12:undefined AM”
-      time_remaining: timeRemaining,
-      time_status: timeStatus,
-      time_value: timeValue,
-      is_creator: isCreator,
-      has_joined: isParticipant,
-      has_bid: hasBid,
-      open_to_all: auction.open_to_all,  
-      creator_info: creator ? {
-        company_name: creator.company_name,
-        person_name: creator.person_name,
-        phone: creator.phone_number,
-        email: creator.email,
-      } : null,
-      winner_info: winner ? {
-        user_id: winner.user_id,
-        person_name: winner.person_name,
-        company_name: winner.company_name,
-        amount: winner.amount
-      } : null,
-      participants: participants.map(p => ({
-        id: p.id,
-        user_id: p.user_id,
-        phone_number: p.phone_number,
-        status: p.status,
-        invited_at: p.invited_at,
-        joined_at: p.joined_at,
-        person_name: p.person_name,
-        company_name: p.company_name
-      })),
-      bids: bids.map(b => ({
-        id: b.id,
-        user_id: b.user_id,
-        amount: b.amount,
-        bid_time: b.bid_time,
-        is_winning: b.is_winning,
-        person_name: b.person_name,
-        company_name: b.company_name
-      })),
-      documents: documents.map(d => ({
-        id: d.id,
-        file_name: d.file_name,
-        file_url: `${req.protocol}://${req.get('host')}/${d.file_path.replace(/\\/g, '/')}`,
-        file_type: d.file_type,
-        uploaded_at: d.uploaded_at
-      })),
-      statistics: {
-  total_participants: participants.length,
-  total_bids: bids.length,
-  active_participants: participants.filter(p => p.status === 'joined').length,
-  highest_bid: bids.length > 0 ? Math.max(...bids.map(b => parseFloat(b.amount || 0))) : null,
-  lowest_bid: bids.length > 0 ? Math.min(...bids.map(b => parseFloat(b.amount || 0))) : null
-}
-    };
-
-    res.json({ success: true, auction: formattedAuction });
+    /* ----------  response  ---------- */
+    res.json({
+      success: true,
+      auction: {
+        ...auction,
+        auction_no: `AUC${auction.id.toString().padStart(3, '0')}`,
+        formatted_start_time: formatTimeToAMPM(auction.start_time),
+        formatted_end_time: formattedEndTime,
+        time_remaining: timeRemaining,
+        time_status: timeStatus,
+        time_value: timeValue,
+        is_creator: isCreator,
+        has_joined: isParticipant,
+        has_bid: hasBid,
+        open_to_all: auction.open_to_all,
+        creator_info: creator ? {
+          company_name: creator.company_name,
+          person_name: creator.person_name,
+          phone: creator.phone_number,
+          email: creator.email,
+        } : null,
+        winner_info: winner ? {
+          user_id: winner.user_id,
+          person_name: winner.person_name,
+          company_name: winner.company_name,
+          amount: winner.amount
+        } : null,
+        participants: participantsRows, // ← every row, no filter
+        bids: bids.map(b => ({
+          id: b.id,
+          user_id: b.user_id,
+          amount: b.amount,
+          bid_time: b.bid_time,
+          is_winning: b.is_winning,
+          person_name: b.person_name,
+          company_name: b.company_name
+        })),
+        documents: documents.map(d => ({
+          id: d.id,
+          file_name: d.file_name,
+          file_url: `${req.protocol}://${req.get('host')}/${d.file_path.replace(/\\/g, '/')}`,
+          file_type: d.file_type,
+          uploaded_at: d.uploaded_at
+        })),
+        statistics: {
+          total_participants: participantsRows.length,
+          total_bids: bids.length,
+          active_participants: participantsRows.filter(p => p.status === 'joined').length,
+          highest_bid: bids.length > 0 ? Math.max(...bids.map(b => parseFloat(b.amount || 0))) : null,
+          lowest_bid: bids.length > 0 ? Math.min(...bids.map(b => parseFloat(b.amount || 0))) : null
+        }
+      }
+    });
 
   } catch (error) {
     console.error('❌ Get auction details error:', error);
