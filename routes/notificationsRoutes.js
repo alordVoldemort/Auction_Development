@@ -7,7 +7,8 @@ router.use(authMiddleware.authenticateToken);
 
 const {
   getMyNotifications,
-  getParticipantNotifications
+  getParticipantNotifications,
+  markAsRead         
 } = require('../controllers/notificationsController');
 
 router.get('/my-notification',  getMyNotifications);
