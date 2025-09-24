@@ -159,7 +159,7 @@ exports.createAuction = async (req, res) => {
 
     let participantList = [], smsCount = 0;
 
-    if (!open_to_all && participants) {
+    if (participants) {
       let parsed = participants;
 
       if (typeof participants === "string") {
