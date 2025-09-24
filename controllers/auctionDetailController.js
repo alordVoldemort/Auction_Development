@@ -70,46 +70,88 @@ exports.getAuctionBids = async (req, res) => {
         console.error(err);
         res.status(500).json({ message: 'Server error' });
     }
-};// Get auction report by ID
+};
+
+// Get auction report by ID
 exports.getAuctionReport = async (req, res) => {
     const auctionId = req.params.id;
 
+    // Validate auctionId
+    if (!auctionId || isNaN(auctionId)) {
+        return res.status(400).json({ message: "Invalid auction ID" });
+    }
+
     try {
-        // 1. Fetch auction details
-        const [auction] = await db.query(
-            "SELECT id, title, decremental_value ,description, auction_date, start_time, base_price, current_price FROM auctions WHERE id = ?",
+        console.log(`Fetching auction report for ID: ${auctionId}`);
+
+        // 1. Fetch auction details - fixed column names to match your table
+        const [auctionResults] = await db.query(
+            `SELECT 
+                id, 
+                title, 
+                decremental_value,
+                description, 
+                auction_date, 
+                start_time, 
+                end_time,  -- Added missing column
+                base_price, 
+                current_price,
+                status,
+                winner_id
+            FROM auctions 
+            WHERE id = ?`,
             [auctionId]
         );
 
-        if (!auction.length) {
+        console.log(`Auction results:`, auctionResults);
+
+        if (!auctionResults || auctionResults.length === 0) {
             return res.status(404).json({ message: "Auction not found" });
         }
 
-        // 2. Fetch bids summary with bid ranks
+        const auction = auctionResults[0];
+
+        // 2. Fetch bids summary with bid ranks - simplified query
         const [bids] = await db.query(
             `SELECT 
                 u.company_name,
+                u.id as user_id,
                 MIN(b.amount) AS pre_bid_offer,
                 MAX(b.amount) AS final_bid_offer,
+                COUNT(b.id) AS total_bids,
                 RANK() OVER (ORDER BY MAX(b.amount) DESC) AS bid_rank
             FROM bids b
             JOIN users u ON b.user_id = u.id
             WHERE b.auction_id = ?
-            GROUP BY u.company_name
+            GROUP BY u.id, u.company_name
             ORDER BY bid_rank ASC`,
             [auctionId]
         );
 
+        console.log(`Bids found:`, bids.length);
+
         // 3. Return combined response
         res.json({
-            ...auction[0],
-            bids,
+            auction: auction,
+            bids: bids,
+            summary: {
+                total_bidders: bids.length,
+                highest_bid: bids.length > 0 ? bids[0].final_bid_offer : auction.base_price
+            }
         });
+
     } catch (err) {
         console.error("Error fetching auction report:", err);
-        res.status(500).json({ message: "Internal server error" });
+        
+        // More detailed error response
+        res.status(500).json({ 
+            message: "Internal server error",
+            error: err.message,
+            stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+        });
     }
 };
+
 // Get all auctions for dropdown
 exports.getAllAuctions = async (req, res) => {
   try {
