@@ -76,7 +76,6 @@ exports.getAuctionBids = async (req, res) => {
 exports.getAuctionReport = async (req, res) => {
     const auctionId = req.params.id;
 
-    // Validate auctionId
     if (!auctionId || isNaN(auctionId)) {
         return res.status(400).json({ message: "Invalid auction ID" });
     }
@@ -84,7 +83,7 @@ exports.getAuctionReport = async (req, res) => {
     try {
         console.log(`Fetching auction report for ID: ${auctionId}`);
 
-        // 1. Fetch auction details - fixed column names to match your table
+        // 1. Fetch auction details - using correct column names from your table
         const [auctionResults] = await db.query(
             `SELECT 
                 id, 
@@ -93,11 +92,16 @@ exports.getAuctionReport = async (req, res) => {
                 description, 
                 auction_date, 
                 start_time, 
-                end_time,  -- Added missing column
-                base_price, 
+                end_time,
+                duration,
+                currency,
                 current_price,
+                pre_bid_allowed,
                 status,
-                winner_id
+                created_by,
+                winner_id,
+                created_at,
+                updated_at
             FROM auctions 
             WHERE id = ?`,
             [auctionId]
@@ -111,7 +115,7 @@ exports.getAuctionReport = async (req, res) => {
 
         const auction = auctionResults[0];
 
-        // 2. Fetch bids summary with bid ranks - simplified query
+        // 2. Fetch bids summary with bid ranks
         const [bids] = await db.query(
             `SELECT 
                 u.company_name,
@@ -136,18 +140,15 @@ exports.getAuctionReport = async (req, res) => {
             bids: bids,
             summary: {
                 total_bidders: bids.length,
-                highest_bid: bids.length > 0 ? bids[0].final_bid_offer : auction.base_price
+                highest_bid: bids.length > 0 ? bids[0].final_bid_offer : auction.current_price || 0
             }
         });
 
     } catch (err) {
         console.error("Error fetching auction report:", err);
-        
-        // More detailed error response
         res.status(500).json({ 
             message: "Internal server error",
-            error: err.message,
-            stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+            error: err.message
         });
     }
 };
