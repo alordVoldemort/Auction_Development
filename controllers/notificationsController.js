@@ -77,3 +77,21 @@ exports.getParticipantNotifications = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 };
+
+exports.markAsRead = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const nid    = parseInt(req.params.id, 10);
+    await db.query(
+      `UPDATE notifications
+       SET is_read = 1
+       WHERE id = ? AND user_id = ?`,
+      [nid, userId]
+    );
+    res.status(204).send();
+  } catch (e) {
+    console.error('❌ markAsRead:', e);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
