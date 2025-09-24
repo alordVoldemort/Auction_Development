@@ -131,15 +131,32 @@ exports.getAuctionReport = async (req, res) => {
             [auctionId]
         );
 
-        // 3. Return combined response
-        res.json({
+        // 3. Convert times to 12-hour format
+        const convertTo12Hour = (timeString) => {
+            if (!timeString) return '';
+            
+            const [hours, minutes, seconds] = timeString.split(':');
+            const hour = parseInt(hours);
+            const ampm = hour >= 12 ? 'PM' : 'AM';
+            const hour12 = hour % 12 || 12;
+            
+            return `${hour12}:${minutes} ${ampm}`;
+        };
+
+        // 4. Prepare response with formatted times
+        const response = {
             ...auction,
+            start_time: convertTo12Hour(auction.start_time),
+            end_time: convertTo12Hour(auction.end_time),
             bids: bids,
             summary: {
                 total_bidders: bids.length,
                 highest_bid: bids.length > 0 ? bids[0].final_bid_offer : auction.current_price || 0
             }
-        });
+        };
+
+        // 5. Return combined response
+        res.json(response);
 
     } catch (err) {
         console.error("Error fetching auction report:", err);
