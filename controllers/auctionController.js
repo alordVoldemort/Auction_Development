@@ -1059,8 +1059,8 @@ exports.getParticipants = async (req, res) => {
         auction_no: `AUC${auction.id.toString().padStart(3, '0')}`,
         formatted_start_time: formatTimeToAMPM(auction.start_time),
         formatted_end_time: auction.end_time
-          ? formatTimeToAMPM(auction.end_time)
-          : calculateEndTime(auction.start_time, auction.duration),
+        ? formatTimeToAMPM(auction.end_time)
+        : formatTimeToAMPM(calcEndTimeHHMMSS(auction.start_time, auction.duration / 60)),
         time_remaining: timeRemaining,
         time_status: timeStatus,
         time_value: timeValue
