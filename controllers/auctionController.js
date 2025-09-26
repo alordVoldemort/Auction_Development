@@ -1988,19 +1988,27 @@ exports.rejectPreBid = async (req, res) => {
 };
 
 // reuse the admin logic: return only active/approved suppliers
-// controllers/auctionController.js  (last lines)
 exports.getApprovedUsers = async (_req, res) => {
   try {
+    console.log(' Fetching approved users...');
+    
     const [rows] = await db.query(
       `SELECT phone_number, company_name, person_name
-       FROM   users
-       WHERE  is_active = 1
-         AND  status    = 'approved'
-       ORDER  BY company_name, person_name`
+       FROM users
+       WHERE is_active = 1 AND status = 'active'
+       ORDER BY company_name, person_name`
     );
+    
+    console.log(`✅ Found ${rows.length} approved users`);
     res.json(rows);
+    
   } catch (e) {
-    console.error('❌ getApprovedUsers:', e);
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error('❌ getApprovedUsers error:', e.message);
+    console.error('Full error:', e);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error',
+      error: e.message 
+    });
   }
 };
