@@ -1,9 +1,9 @@
 const db = require('../db');
 
-// Get Admin Dashboard Overview - COMPREHENSIVE VERSION
+// Get Admin Dashboard Overview - FIXED VERSION
 exports.getAdminDashboard = async (req, res) => {
   try {
-    // Get all dashboard stats in parallel
+    // Get all dashboard stats in parallel - FIXED UPCOMING AUCTIONS QUERY
     const [
       totalUsers,
       totalAuctions,
@@ -20,7 +20,8 @@ exports.getAdminDashboard = async (req, res) => {
     ] = await Promise.all([
       db.query('SELECT COUNT(*) as count FROM users'),
       db.query('SELECT COUNT(*) as count FROM auctions'),
-      db.query('SELECT COUNT(*) as count FROM auctions WHERE status = "upcoming"'),
+      // FIX: Added time check to ensure only future auctions are counted as upcoming
+      db.query('SELECT COUNT(*) as count FROM auctions WHERE status = "upcoming" AND CONCAT(auction_date, " ", start_time) > NOW()'),
       db.query('SELECT COUNT(*) as count FROM auctions WHERE status = "live"'),
       db.query('SELECT COUNT(*) as count FROM auctions WHERE status = "completed"'),
       db.query('SELECT COUNT(*) as count FROM auctions WHERE status = "cancelled"'),
@@ -32,7 +33,7 @@ exports.getAdminDashboard = async (req, res) => {
       db.query('SELECT COUNT(*) as count FROM auctions WHERE status = "pending" OR status IS NULL')
     ]);
 
-    // Get recent activities
+    // Get recent activities (unchanged)
     const [recentActivities] = await db.query(`
       (
         SELECT 
@@ -196,41 +197,53 @@ exports.getAdminDashboard = async (req, res) => {
       };
     });
 
-    // Get upcoming auctions with participant counts
+    // Get upcoming auctions with participant counts - FIXED QUERY
     const [upcomingAuctionsList] = await db.query(`
       SELECT 
         a.id,
         a.title,
         a.auction_date,
         a.start_time,
+        a.end_time,
         a.currency,
+        a.status,
         u.company_name as creator_company,
         COUNT(ap.id) as participant_count
       FROM auctions a
       JOIN users u ON a.created_by = u.id
       LEFT JOIN auction_participants ap ON a.id = ap.auction_id
-      WHERE a.status = 'upcoming'
+      WHERE a.status = 'upcoming' 
+        AND CONCAT(a.auction_date, ' ', a.start_time) > NOW()  // ← KEY FIX: TIME CHECK
       GROUP BY a.id
       ORDER BY a.auction_date, a.start_time
       LIMIT 5
     `);
 
-    // Format upcoming auctions
-    const formattedUpcomingAuctions = upcomingAuctionsList.map(auction => ({
-      id: auction.id,
-      title: auction.title,
-      participant_count: auction.participant_count,
-      company: auction.creator_company,
-      start_time: new Date(`${auction.auction_date}T${auction.start_time}`).toLocaleString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true
-      }),
-      auction_no: `AUC${auction.id.toString().padStart(3, '0')}`
-    }));
+    // Format upcoming auctions with additional server-side validation
+    const now = new Date();
+    const formattedUpcomingAuctions = upcomingAuctionsList
+      .map(auction => {
+        const auctionDateTime = new Date(`${auction.auction_date}T${auction.start_time}`);
+        
+        return {
+          id: auction.id,
+          title: auction.title,
+          participant_count: auction.participant_count,
+          company: auction.creator_company,
+          start_time: auctionDateTime.toLocaleString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+          }),
+          auction_no: `AUC${auction.id.toString().padStart(3, '0')}`,
+          raw_start_time: auctionDateTime.getTime(), // For additional validation
+          server_time: now.getTime() // For debugging
+        };
+      })
+      .filter(auction => auction.raw_start_time > now.getTime()); // Final server-side filter
 
     // Quick actions data
     const quickActions = [
@@ -274,7 +287,7 @@ exports.getAdminDashboard = async (req, res) => {
         overview: {
           total_users: totalUsers[0][0].count,
           total_auctions: totalAuctions[0][0].count,
-          upcoming_auctions: upcomingAuctions[0][0].count,
+          upcoming_auctions: formattedUpcomingAuctions.length, // Use filtered count
           live_auctions: liveAuctions[0][0].count,
           completed_auctions: completedAuctions[0][0].count,
           cancelled_auctions: cancelledAuctions[0][0].count || 0,
@@ -287,7 +300,11 @@ exports.getAdminDashboard = async (req, res) => {
         },
         recent_activities: formattedActivities,
         upcoming_auctions: formattedUpcomingAuctions,
-        quick_actions: quickActions
+        quick_actions: quickActions,
+        debug: {
+          total_upcoming_in_db: upcomingAuctions[0][0].count,
+          filtered_upcoming: formattedUpcomingAuctions.length
+        }
       }
     });
 
@@ -300,4 +317,3 @@ exports.getAdminDashboard = async (req, res) => {
     });
   }
 };
-
