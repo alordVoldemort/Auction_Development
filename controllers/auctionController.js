@@ -1986,3 +1986,19 @@ exports.rejectPreBid = async (req, res) => {
     });
   }
 };
+
+// reuse the admin logic: return only active/approved suppliers
+exports.getApprovedUsers = async (_req, res) => {
+  try {
+    // fake the query-params that getAllUsers expects
+    const fakeReq = { query: { status: 'active', limit: 10000, page: 1, search: '' } };
+    const fakeRes = {
+      json: (data) => res.json(data.users || []),   // unwrap only the array
+      status: () => ({ json: (e) => res.status(500).json(e) })
+    };
+    await require('./admin').getAllUsers(fakeReq, fakeRes);
+  } catch (e) {
+    console.error('❌ getApprovedUsers:', e);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
