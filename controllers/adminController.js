@@ -20,7 +20,7 @@ exports.getAdminDashboard = async (req, res) => {
     ] = await Promise.all([
       db.query('SELECT COUNT(*) as count FROM users'),
       db.query('SELECT COUNT(*) as count FROM auctions'),
-      db.query('SELECT COUNT(*) as count FROM auctions WHERE status = "upcoming"'),
+      db.query('SELECT COUNT(*) as count FROM auctions WHERE status = "upcoming" AND CONCAT(auction_date, " ", start_time) > NOW()'),
       db.query('SELECT COUNT(*) as count FROM auctions WHERE status = "live"'),
       db.query('SELECT COUNT(*) as count FROM auctions WHERE status = "completed"'),
       db.query('SELECT COUNT(*) as count FROM auctions WHERE status = "cancelled"'),
@@ -197,23 +197,23 @@ exports.getAdminDashboard = async (req, res) => {
     });
 
     // Get upcoming auctions with participant counts
-    const [upcomingAuctionsList] = await db.query(`
-      SELECT 
-        a.id,
-        a.title,
-        a.auction_date,
-        a.start_time,
-        a.currency,
-        u.company_name as creator_company,
-        COUNT(ap.id) as participant_count
-      FROM auctions a
-      JOIN users u ON a.created_by = u.id
-      LEFT JOIN auction_participants ap ON a.id = ap.auction_id
-      WHERE a.status = 'upcoming'
-      GROUP BY a.id
-      ORDER BY a.auction_date, a.start_time
-      LIMIT 5
-    `);
+const [upcomingAuctionsList] = await db.query(`
+  SELECT 
+    a.id,
+    a.title,
+    a.auction_date,
+    a.start_time,
+    a.currency,
+    u.company_name as creator_company,
+    COUNT(ap.id) as participant_count
+  FROM auctions a
+  JOIN users u ON a.created_by = u.id
+  LEFT JOIN auction_participants ap ON a.id = ap.auction_id
+  WHERE a.status = 'upcoming' AND CONCAT(a.auction_date, ' ', a.start_time) > NOW()
+  GROUP BY a.id
+  ORDER BY a.auction_date, a.start_time
+  LIMIT 5
+`);
 
     // Format upcoming auctions
     const formattedUpcomingAuctions = upcomingAuctionsList.map(auction => ({
