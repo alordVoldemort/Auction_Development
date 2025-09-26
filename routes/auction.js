@@ -34,5 +34,6 @@ router.get('/:id/my-prebid', auctionController.getMyPreBid); // NEW: Get user's 
 router.get('/:id/prebids', auctionController.getPreBids);
 router.post('/prebid/:id/approve', auctionController.approvePreBid);
 router.post('/prebid/:id/reject', auctionController.rejectPreBid);
+router.get('/users/approved', auctionController.getApprovedUsers);
 
 module.exports = router;
