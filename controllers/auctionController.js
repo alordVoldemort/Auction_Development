@@ -1988,15 +1988,17 @@ exports.rejectPreBid = async (req, res) => {
 };
 
 // reuse the admin logic: return only active/approved suppliers
+// controllers/auctionController.js  (last lines)
 exports.getApprovedUsers = async (_req, res) => {
   try {
-    // fake the query-params that getAllUsers expects
-    const fakeReq = { query: { status: 'active', limit: 10000, page: 1, search: '' } };
-    const fakeRes = {
-      json: (data) => res.json(data.users || []),   // unwrap only the array
-      status: () => ({ json: (e) => res.status(500).json(e) })
-    };
-    await require('./admin').getAllUsers(fakeReq, fakeRes);
+    const [rows] = await db.query(
+      `SELECT phone_number, company_name, person_name
+       FROM   users
+       WHERE  is_active = 1
+         AND  status    = 'approved'
+       ORDER  BY company_name, person_name`
+    );
+    res.json(rows);
   } catch (e) {
     console.error('❌ getApprovedUsers:', e);
     res.status(500).json({ success: false, message: 'Server error' });
