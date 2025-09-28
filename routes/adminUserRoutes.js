@@ -10,6 +10,10 @@ router.use(verifyAdminToken);
 router.get('/users', adminUserController.getAllUsers);
 router.get('/users/:id', adminUserController.getUserById);
 router.patch('/users/:id/status', adminUserController.updateUserStatus);
+
+// Block/unblock routes - FIXED: Added /users prefix
+router.put('/users/:id/block', adminUserController.blockUser);
+router.put('/users/:id/unblock', adminUserController.unblockUser);
 // router.delete('/users/:id', adminUserController.deleteUser);
 // router.post('/users/bulk-actions', adminUserController.bulkUserActions);
 
