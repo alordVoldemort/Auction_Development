@@ -478,80 +478,53 @@ exports.blockUser = async (req, res) => {
     const { id } = req.params;
     const { status_note } = req.body;
 
-    // Check if user exists
     const [user] = await db.query('SELECT id, status FROM users WHERE id = ?', [id]);
     if (user.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Start transaction
     await db.query('START TRANSACTION');
 
-    try {
-      // Update user status to blocked
-      const [result] = await db.query(
-        `UPDATE users 
-         SET status = 'blocked', 
-             is_active = 0, 
-             updated_at = NOW(), 
-             status_note = ?
-         WHERE id = ?`,
-        [status_note || 'User blocked by admin', id]
-      );
+    // Block user
+    await db.query(
+      `UPDATE users 
+       SET status = 'blocked', 
+           is_active = 0, 
+           updated_at = NOW()
+       WHERE id = ?`,
+      [id]
+    );
 
-      if (result.affectedRows === 0) {
-        await db.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Failed to block user'
-        });
-      }
+    // Cancel bids (use correct column name)
+    await db.query(
+      `UPDATE bids 
+       SET bid_status = 'cancelled', 
+           updated_at = NOW() 
+       WHERE user_id = ? AND bid_status IN ('pending', 'approved')`,
+      [id]
+    );
 
-      // Cancel all user's active bids
-      await db.query(
-        `UPDATE bids 
-         SET status = 'cancelled', 
-             updated_at = NOW() 
-         WHERE user_id = ? AND status IN ('pending', 'approved')`,
-        [id]
-      );
+    // Remove from auction participants (use correct column name)
+    await db.query(
+      `UPDATE auction_participants 
+       SET participant_status = 'removed', 
+           updated_at = NOW() 
+       WHERE user_id = ? AND participant_status = 'joined'`,
+      [id]
+    );
 
-      // Remove user from active auction participants
-      await db.query(
-        `UPDATE auction_participants 
-         SET status = 'removed', 
-             updated_at = NOW() 
-         WHERE user_id = ? AND status = 'joined'`,
-        [id]
-      );
+    await db.query('COMMIT');
 
-      await db.query('COMMIT');
-
-      res.json({
-        success: true,
-        message: 'User blocked successfully. All active bids cancelled and user removed from ongoing auctions.',
-        data: {
-          user_id: parseInt(id),
-          status: 'blocked',
-          is_active: false
-        }
-      });
-
-    } catch (error) {
-      await db.query('ROLLBACK');
-      throw error;
-    }
+    res.json({
+      success: true,
+      message: 'User blocked successfully. All active bids cancelled and user removed from ongoing auctions.',
+      data: { user_id: parseInt(id), status: 'blocked', is_active: false }
+    });
 
   } catch (error) {
+    await db.query('ROLLBACK');
     console.error('❌ Block user error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
@@ -559,52 +532,30 @@ exports.blockUser = async (req, res) => {
 exports.unblockUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status_note } = req.body;
 
-    // Check if user exists
-    const [user] = await db.query('SELECT id, status FROM users WHERE id = ?', [id]);
+    const [user] = await db.query('SELECT id FROM users WHERE id = ?', [id]);
     if (user.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Update user status to active and activate
-    const [result] = await db.query(
+    await db.query(
       `UPDATE users 
        SET status = 'active', 
            is_active = 1, 
-           updated_at = NOW(), 
-           status_note = ?
+           updated_at = NOW()
        WHERE id = ?`,
-      [status_note || 'User unblocked by admin', id]
+      [id]
     );
-
-    if (result.affectedRows === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Failed to unblock user'
-      });
-    }
 
     res.json({
       success: true,
       message: 'User unblocked successfully',
-      data: {
-        user_id: parseInt(id),
-        status: 'active',
-        is_active: true
-      }
+      data: { user_id: parseInt(id), status: 'active', is_active: true }
     });
 
   } catch (error) {
     console.error('❌ Unblock user error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
