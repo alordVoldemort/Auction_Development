@@ -471,37 +471,25 @@ exports.updateUserStatus = async (req, res) => {
 // };
 
 
-
 // Block user
 exports.blockUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status_note } = req.body;
 
     const [user] = await db.query('SELECT id FROM users WHERE id = ?', [id]);
     if (user.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
 
     await db.query('START TRANSACTION');
 
-    // Block user
     await db.query(
-      `UPDATE users 
-       SET status = 'blocked', 
-           is_active = 0, 
-           updated_at = NOW()
-       WHERE id = ?`,
+      `UPDATE users SET status = 'blocked', is_active = 0 WHERE id = ?`,
       [id]
     );
 
-    // Mark bids as non-winning (no status column in bids)
     await db.query(`UPDATE bids SET is_winning = 0 WHERE user_id = ?`, [id]);
 
-    // Remove from auction participants (valid status column exists)
     await db.query(
-      `UPDATE auction_participants 
-       SET status = 'declined', 
-           updated_at = NOW() 
-       WHERE user_id = ? AND status = 'joined'`,
+      `UPDATE auction_participants SET status = 'declined' WHERE user_id = ? AND status = 'joined'`,
       [id]
     );
 
@@ -509,7 +497,7 @@ exports.blockUser = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'User blocked successfully. All active bids cancelled and user removed from ongoing auctions.',
+      message: 'User blocked successfully',
       data: { user_id: parseInt(id), status: 'blocked', is_active: false }
     });
 
@@ -520,6 +508,7 @@ exports.blockUser = async (req, res) => {
   }
 };
 
+// Unblock user
 exports.unblockUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -528,11 +517,7 @@ exports.unblockUser = async (req, res) => {
     if (user.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
 
     await db.query(
-      `UPDATE users 
-       SET status = 'active', 
-           is_active = 1, 
-           updated_at = NOW()
-       WHERE id = ?`,
+      `UPDATE users SET status = 'active', is_active = 1 WHERE id = ?`,
       [id]
     );
 
