@@ -478,10 +478,8 @@ exports.blockUser = async (req, res) => {
     const { id } = req.params;
     const { status_note } = req.body;
 
-    const [user] = await db.query('SELECT id, status FROM users WHERE id = ?', [id]);
-    if (user.length === 0) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
+    const [user] = await db.query('SELECT id FROM users WHERE id = ?', [id]);
+    if (user.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
 
     await db.query('START TRANSACTION');
 
@@ -495,21 +493,15 @@ exports.blockUser = async (req, res) => {
       [id]
     );
 
-    // Cancel bids (use correct column name)
-    await db.query(
-      `UPDATE bids 
-       SET bid_status = 'cancelled', 
-           updated_at = NOW() 
-       WHERE user_id = ? AND bid_status IN ('pending', 'approved')`,
-      [id]
-    );
+    // Mark bids as non-winning (no status column in bids)
+    await db.query(`UPDATE bids SET is_winning = 0 WHERE user_id = ?`, [id]);
 
-    // Remove from auction participants (use correct column name)
+    // Remove from auction participants (valid status column exists)
     await db.query(
       `UPDATE auction_participants 
-       SET participant_status = 'removed', 
+       SET status = 'declined', 
            updated_at = NOW() 
-       WHERE user_id = ? AND participant_status = 'joined'`,
+       WHERE user_id = ? AND status = 'joined'`,
       [id]
     );
 
@@ -528,15 +520,12 @@ exports.blockUser = async (req, res) => {
   }
 };
 
-// Unblock user
 exports.unblockUser = async (req, res) => {
   try {
     const { id } = req.params;
 
     const [user] = await db.query('SELECT id FROM users WHERE id = ?', [id]);
-    if (user.length === 0) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
+    if (user.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
 
     await db.query(
       `UPDATE users 
