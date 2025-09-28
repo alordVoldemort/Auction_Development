@@ -469,3 +469,159 @@ exports.updateUserStatus = async (req, res) => {
 //     });
 //   }
 // };
+
+
+
+// Block user
+exports.blockUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status_note } = req.body;
+
+    // Check if user exists
+    const [user] = await db.query('SELECT id, status FROM users WHERE id = ?', [id]);
+    if (user.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Start transaction
+    await db.query('START TRANSACTION');
+
+    try {
+      // Update user status to blocked
+      const [result] = await db.query(
+        `UPDATE users 
+         SET status = 'blocked', 
+             is_active = 0, 
+             updated_at = NOW(), 
+             status_note = ?
+         WHERE id = ?`,
+        [status_note || 'User blocked by admin', id]
+      );
+
+      if (result.affectedRows === 0) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Failed to block user'
+        });
+      }
+
+      // Cancel all user's active bids
+      await db.query(
+        `UPDATE bids 
+         SET status = 'cancelled', 
+             updated_at = NOW() 
+         WHERE user_id = ? AND status IN ('pending', 'approved')`,
+        [id]
+      );
+
+      // Remove user from active auction participants
+      await db.query(
+        `UPDATE auction_participants 
+         SET status = 'removed', 
+             updated_at = NOW() 
+         WHERE user_id = ? AND status = 'joined'`,
+        [id]
+      );
+
+      await db.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: 'User blocked successfully. All active bids cancelled and user removed from ongoing auctions.',
+        data: {
+          user_id: parseInt(id),
+          status: 'blocked',
+          is_active: false
+        }
+      });
+
+    } catch (error) {
+      await db.query('ROLLBACK');
+      throw error;
+    }
+
+  } catch (error) {
+    console.error('❌ Block user error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// Unblock user
+exports.unblockUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status_note } = req.body;
+
+    // Check if user exists
+    const [user] = await db.query('SELECT id, status FROM users WHERE id = ?', [id]);
+    if (user.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Update user status to active and activate
+    const [result] = await db.query(
+      `UPDATE users 
+       SET status = 'active', 
+           is_active = 1, 
+           updated_at = NOW(), 
+           status_note = ?
+       WHERE id = ?`,
+      [status_note || 'User unblocked by admin', id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to unblock user'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'User unblocked successfully',
+      data: {
+        user_id: parseInt(id),
+        status: 'active',
+        is_active: true
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Unblock user error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// Helper function to check if user is blocked
+exports.checkUserBlocked = async (userId) => {
+  try {
+    const [users] = await db.query(
+      'SELECT id, status, is_active FROM users WHERE id = ?',
+      [userId]
+    );
+    
+    if (users.length === 0) return true; // User not found, consider blocked
+    
+    const user = users[0];
+    return user.status === 'blocked' || user.is_active === 0;
+  } catch (error) {
+    console.error('❌ Check user blocked error:', error);
+    return true; // On error, consider blocked for safety
+  }
+};
