@@ -63,6 +63,22 @@ async function notify(userIds, type, auctionId, message) {
   }
 }
 
+// Helper to check if user is blocked
+async function isUserBlocked(userId) {
+  try {
+    const [users] = await db.query(
+      'SELECT status, is_active FROM users WHERE id = ?',
+      [userId]
+    );
+    
+    if (users.length === 0) return true;
+    const user = users[0];
+    return user.status === 'blocked' || user.is_active === 0;
+  } catch (error) {
+    return true; // On error, consider blocked for safety
+  }
+}
+
 // ------------------------------------------------------------------
 // status updater & cron
 // ------------------------------------------------------------------
@@ -142,6 +158,25 @@ exports.createAuction = async (req, res) => {
       return res.status(400).json({ success: false, message: 'start_time must be valid HH:MM:SS (00-23)' });
 
     const created_by = req.user.userId;
+    
+    // ADDED: Check if user is blocked
+    const [userCheck] = await db.query(
+      'SELECT status, is_active FROM users WHERE id = ?',
+      [created_by]
+    );
+    
+    if (userCheck.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    const user = userCheck[0];
+    if (user.status === 'blocked' || user.is_active === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is blocked. You cannot create auctions.'
+      });
+    }
+
     const end_time = calcEndTimeHHMMSS(start_time, parseInt(duration, 10));
 
     const auctionId = await Auction.create({
@@ -532,6 +567,24 @@ exports.placeBid = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Invalid auction ID or bid amount'
+      });
+    }
+
+    // ADDED: Check if user is blocked
+    const [userCheck] = await db.query(
+      'SELECT status, is_active FROM users WHERE id = ?',
+      [userId]
+    );
+    
+    if (userCheck.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    const user = userCheck[0];
+    if (user.status === 'blocked' || user.is_active === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is blocked. You cannot place bids.'
       });
     }
 
@@ -1575,6 +1628,24 @@ exports.submitPreBid = async (req, res) => {
     }
 
     const user = userRows[0];
+
+    // ADDED: Check if user is blocked
+    const [userCheck] = await db.query(
+      'SELECT status, is_active FROM users WHERE id = ?',
+      [user.id]
+    );
+    
+    if (userCheck.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    const userStatus = userCheck[0];
+    if (userStatus.status === 'blocked' || userStatus.is_active === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is blocked. You cannot submit pre-bids.'
+      });
+    }
 
     // Check if user is a participant in this auction, if not auto-register them
     const [participantRows] = await db.query(
