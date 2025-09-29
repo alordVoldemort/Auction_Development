@@ -184,6 +184,7 @@ exports.getAuctionById = async (req, res) => {
   }
 };
 
+
 // Update auction status
 exports.updateAuctionStatus = async (req, res) => {
   try {
