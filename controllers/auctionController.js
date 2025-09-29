@@ -361,7 +361,7 @@ exports.updateDecrementalValue = async (req, res) => {
 exports.getAuctionDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.user.userId;
+    const userId = req.user?.userId; // Make userId optional to handle non-logged in users
 
     if (!id) return res.status(400).json({ success: false, message: 'Auction ID is required' });
 
@@ -369,12 +369,20 @@ exports.getAuctionDetails = async (req, res) => {
     if (!auction) return res.status(404).json({ success: false, message: 'Auction not found' });
 
     const isCreator = auction.created_by === userId;
-    const userPhone = req.user.phone_number || '';
+    const userPhone = req.user?.phone_number || '';
     const isParticipant = await AuctionParticipant.isParticipant(id, userPhone);
     const hasBid = await Bid.hasUserBid(id, userId);
 
-    if (!isCreator && !isParticipant && !hasBid && !auction.open_to_all)
-      return res.status(403).json({ success: false, message: 'You do not have access to this auction' });
+    // FIXED: Proper access control for open auctions - requires login
+    if (!isCreator && !isParticipant && !hasBid) {
+      if (!auction.open_to_all) {
+        return res.status(403).json({ success: false, message: 'You do not have access to this auction' });
+      }
+      // For open auctions, require login
+      if (!userId) {
+        return res.status(401).json({ success: false, message: 'Please login to view this auction' });
+      }
+    }
 
     /* ----------  NEW:  fetch every row for this auction  ---------- */
     const [participantsRows] = await db.query(
@@ -491,6 +499,7 @@ exports.getAuctionDetails = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
+
 
 // ------------------------------------------------------------------
 // utility used by several handlers
