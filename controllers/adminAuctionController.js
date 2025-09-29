@@ -131,7 +131,7 @@ exports.getAuctionById = async (req, res) => {
       });
     }
 
-    /* 2.  Participants – phone_number join + fallback -------- */
+    /* 2.  Participants – phone_number join -------------------- */
     const [participants] = await db.query(
       `SELECT ap.id,
               ap.auction_id,
@@ -140,8 +140,8 @@ exports.getAuctionById = async (req, res) => {
               ap.status,
               ap.invited_at,
               ap.joined_at,
-              COALESCE(u.person_name,  ap.person_name)  AS person_name,
-              COALESCE(u.company_name, ap.company_name) AS company_name,
+              u.person_name,
+              u.company_name,
               u.email
        FROM auction_participants ap
        LEFT JOIN users u ON u.phone_number = ap.phone_number
@@ -187,7 +187,6 @@ exports.getAuctionById = async (req, res) => {
     });
   }
 };
-
 
 // Update auction status
 exports.updateAuctionStatus = async (req, res) => {
