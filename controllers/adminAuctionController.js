@@ -109,61 +109,65 @@ exports.getAuctions = async (req, res) => {
 exports.getAuctionById = async (req, res) => {
   try {
     const { id } = req.params;
-    
-    // Get auction basic info
+
+    /* 1.  Auction header + auctioneer info -------------------- */
     const [auction] = await db.query(
-      `SELECT 
-        a.*,
-        u.person_name as auctioneer_name,
-        u.company_name,
-        u.phone_number,
-        u.email,
-        u.company_address
-      FROM auctions a
-      LEFT JOIN users u ON a.created_by = u.id
-      WHERE a.id = ?`,
+      `SELECT a.*,
+              u.person_name AS auctioneer_name,
+              u.company_name,
+              u.phone_number,
+              u.email,
+              u.company_address
+       FROM auctions a
+       LEFT JOIN users u ON a.created_by = u.id
+       WHERE a.id = ?`,
       [id]
     );
-    
-    if (auction.length === 0) {
+
+    if (!auction.length) {
       return res.status(404).json({
         success: false,
         message: 'Auction not found'
       });
     }
-    
-    // Get participants
+
+    /* 2.  Participants – phone_number join + fallback -------- */
     const [participants] = await db.query(
-      `SELECT 
-        ap.*,
-        u.person_name,
-        u.company_name,
-        u.email
-      FROM auction_participants ap
-      LEFT JOIN users u ON ap.user_id = u.id
-      WHERE ap.auction_id = ?`,
+      `SELECT ap.id,
+              ap.auction_id,
+              ap.user_id,
+              ap.phone_number,
+              ap.status,
+              ap.invited_at,
+              ap.joined_at,
+              COALESCE(u.person_name,  ap.person_name)  AS person_name,
+              COALESCE(u.company_name, ap.company_name) AS company_name,
+              u.email
+       FROM auction_participants ap
+       LEFT JOIN users u ON u.phone_number = ap.phone_number
+       WHERE ap.auction_id = ?`,
       [id]
     );
-    
-    // Get bids
+
+    /* 3.  Bids ---------------------------------------------- */
     const [bids] = await db.query(
-      `SELECT 
-        b.*,
-        u.person_name,
-        u.company_name
-      FROM bids b
-      LEFT JOIN users u ON b.user_id = u.id
-      WHERE b.auction_id = ?
-      ORDER BY b.bid_time DESC`,
+      `SELECT b.*,
+              u.person_name,
+              u.company_name
+       FROM bids b
+       LEFT JOIN users u ON b.user_id = u.id
+       WHERE b.auction_id = ?
+       ORDER BY b.bid_time DESC`,
       [id]
     );
-    
-    // Get documents
+
+    /* 4.  Documents ----------------------------------------- */
     const [documents] = await db.query(
       'SELECT * FROM auction_documents WHERE auction_id = ?',
       [id]
     );
-    
+
+    /* 5.  Response ------------------------------------------ */
     res.json({
       success: true,
       auction: {
@@ -173,7 +177,7 @@ exports.getAuctionById = async (req, res) => {
         documents
       }
     });
-    
+
   } catch (error) {
     console.error('❌ Get auction by ID error:', error);
     res.status(500).json({
