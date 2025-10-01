@@ -205,6 +205,8 @@ exports.createAuction = async (req, res) => {
         }
       }
 
+      
+
       participantList = [...new Set(
         (Array.isArray(parsed) ? parsed : [parsed])
           .map(p => String(p).replace(/[\[\]"]/g, "").trim())
@@ -373,16 +375,18 @@ exports.getAuctionDetails = async (req, res) => {
     const isParticipant = await AuctionParticipant.isParticipant(id, userPhone);
     const hasBid = await Bid.hasUserBid(id, userId);
 
-    // FIXED: Proper access control for open auctions - requires login
-    if (!isCreator && !isParticipant && !hasBid) {
-      if (!auction.open_to_all) {
-        return res.status(403).json({ success: false, message: 'You do not have access to this auction' });
-      }
-      // For open auctions, require login
-      if (!userId) {
-        return res.status(401).json({ success: false, message: 'Please login to view this auction' });
-      }
-    }
+    // FIXED: Simplified access control logic
+if (!auction.open_to_all) {
+  // For closed auctions: only creator, participants, or bidders can access
+  if (!isCreator && !isParticipant && !hasBid) {
+    return res.status(403).json({ success: false, message: 'You do not have access to this auction' });
+  }
+} else {
+  // For open auctions: require login but no participant check
+  if (!userId) {
+    return res.status(401).json({ success: false, message: 'Please login to view this auction' });
+  }
+}
 
     /* ----------  NEW:  fetch every row for this auction  ---------- */
     const [participantsRows] = await db.query(
@@ -440,6 +444,9 @@ exports.getAuctionDetails = async (req, res) => {
       } else timeStatus = 'Starting soon';
     }
 
+    // FIXED: For open auctions, consider user as "joined" automatically
+    const hasJoined = auction.open_to_all ? true : isParticipant;
+
     /* ----------  response  ---------- */
     res.json({
       success: true,
@@ -452,7 +459,7 @@ exports.getAuctionDetails = async (req, res) => {
         time_status: timeStatus,
         time_value: timeValue,
         is_creator: isCreator,
-        has_joined: isParticipant,
+        has_joined: hasJoined, // FIXED: This is the key change
         has_bid: hasBid,
         open_to_all: auction.open_to_all,
         creator_info: creator ? {
@@ -499,7 +506,6 @@ exports.getAuctionDetails = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
-
 
 // ------------------------------------------------------------------
 // utility used by several handlers
@@ -644,12 +650,26 @@ exports.placeBid = async (req, res) => {
           [auctionId, phone]
         );
         if (!participant) {
+          // For open auctions OR if user is bidding, auto-register them with appropriate status
+          const status = auction.open_to_all ? 'joined' : 'approved';
           await db.query(
             `INSERT INTO auction_participants
              (auction_id, phone_number, user_id, status, joined_at)
-             VALUES (?, ?, ?, 'approved', NOW())`,
-            [auctionId, phone, userId]
+             VALUES (?, ?, ?, ?, NOW())`,
+            [auctionId, phone, userId, status]
           );
+          
+          // Send notification to user for being added to auction
+          const addedMessage = `You've been added to auction "${auction.title}" and placed a bid of ${bidAmount} ${auction.currency}.`;
+          await notify(userId, 'added_to_auction', auctionId, addedMessage);
+        } else {
+          // Update existing participant status to 'joined' if it's an open auction
+          if (auction.open_to_all) {
+            await db.query(
+              'UPDATE auction_participants SET status = "joined", joined_at = NOW() WHERE auction_id = ? AND phone_number = ?',
+              [auctionId, phone]
+            );
+          }
         }
       }
     } catch (e) {
