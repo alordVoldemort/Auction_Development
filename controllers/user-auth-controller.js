@@ -16,13 +16,13 @@ exports.signup = async (req, res) => {
       return res.status(400).json({ success: false, message: "Person name should only contain letters" });
     }
 
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ success: false, message: "Invalid email format" });
-    }
-
-    // if (!company_product_service || company_product_service.trim().length < 2) {
-    //   return res.status(400).json({ success: false, message: "Company product/service is required" });
+    // if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    //   return res.status(400).json({ success: false, message: "Invalid email format" });
     // }
+
+    if (!company_product_service || company_product_service.trim().length < 2) {
+      return res.status(400).json({ success: false, message: "Company product/service is required" });
+    }
 
     if (company_address && company_address.length > 255) {
       return res.status(400).json({ success: false, message: "Company address must be less than 255 characters" });
